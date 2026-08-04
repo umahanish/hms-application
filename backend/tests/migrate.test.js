@@ -1,7 +1,13 @@
 import { describe, expect, it, beforeEach, afterEach } from 'vitest';
 import { createConnection } from '../src/db/connection.js';
 import { migrateUp, migrateDown, appliedMigrations } from '../src/db/migrate.js';
-import { migrations } from '../src/migrations/index.js';
+import * as createPatients from '../src/migrations/001_create_patients.js';
+
+// These tests exercise the migration runner's mechanics (apply/rollback/idempotency)
+// in isolation, using only the first migration, so they don't need updating every
+// time a new migration is added to the registry. Registry-wide behavior (all
+// migrations applying together) is covered in migrations.index.test.js.
+const migrations = [createPatients];
 
 describe('migrations', () => {
   let db;

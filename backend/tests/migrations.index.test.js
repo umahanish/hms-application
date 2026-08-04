@@ -1,0 +1,62 @@
+import { describe, expect, it, beforeEach, afterEach } from 'vitest';
+import { createConnection } from '../src/db/connection.js';
+import { migrateUp, migrateDown, appliedMigrations } from '../src/db/migrate.js';
+import { migrations } from '../src/migrations/index.js';
+
+describe('full migration registry', () => {
+  let db;
+
+  beforeEach(() => {
+    db = createConnection(':memory:');
+  });
+
+  afterEach(() => {
+    db.close();
+  });
+
+  it('applies every registered migration in order', () => {
+    migrateUp(db, migrations);
+
+    expect(appliedMigrations(db)).toEqual(['001_create_patients', '002_create_scheduling']);
+  });
+
+  it('creates all scheduling tables with the expected columns', () => {
+    migrateUp(db, migrations);
+
+    const tableInfo = (table) => db.prepare(`PRAGMA table_info(${table})`).all().map((c) => c.name);
+
+    expect(tableInfo('doctors')).toEqual(
+      expect.arrayContaining(['id', 'name', 'department', 'slot_duration_minutes', 'buffer_minutes']),
+    );
+    expect(tableInfo('doctor_working_hours')).toEqual(
+      expect.arrayContaining(['id', 'doctor_id', 'day_of_week', 'start_time', 'end_time']),
+    );
+    expect(tableInfo('doctor_leave')).toEqual(
+      expect.arrayContaining(['id', 'doctor_id', 'leave_date', 'reason']),
+    );
+    expect(tableInfo('holidays')).toEqual(expect.arrayContaining(['id', 'holiday_date', 'name']));
+    expect(tableInfo('appointments')).toEqual(
+      expect.arrayContaining([
+        'id',
+        'patient_id',
+        'doctor_id',
+        'appointment_date',
+        'start_time',
+        'end_time',
+        'status',
+        'created_at',
+        'updated_at',
+      ]),
+    );
+  });
+
+  it('rolls the newest migration back first, then the next, in reverse order', () => {
+    migrateUp(db, migrations);
+
+    expect(migrateDown(db, migrations)).toBe('002_create_scheduling');
+    expect(appliedMigrations(db)).toEqual(['001_create_patients']);
+
+    expect(migrateDown(db, migrations)).toBe('001_create_patients');
+    expect(appliedMigrations(db)).toEqual([]);
+  });
+});
