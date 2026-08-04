@@ -106,6 +106,8 @@ export default function AppointmentBooking() {
           </dd>
           <dt>Doctor</dt>
           <dd>{selectedDoctor?.name ?? `Doctor #${confirmation.doctorId}`}</dd>
+          <dt>Location</dt>
+          <dd>{selectedDoctor?.location ?? 'To be confirmed'}</dd>
           <dt>Date</dt>
           <dd>{confirmation.date}</dd>
           <dt>Time</dt>

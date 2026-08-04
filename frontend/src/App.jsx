@@ -1,10 +1,12 @@
 import { useState } from 'react';
 import PatientManagement from './components/PatientManagement.jsx';
 import AppointmentBooking from './components/AppointmentBooking.jsx';
+import UpcomingAppointments from './components/UpcomingAppointments.jsx';
 
 const TABS = [
   { id: 'patients', label: 'Patients', Component: PatientManagement },
   { id: 'appointments', label: 'Book Appointment', Component: AppointmentBooking },
+  { id: 'upcoming', label: 'Upcoming Appointments', Component: UpcomingAppointments },
 ];
 
 export default function App() {

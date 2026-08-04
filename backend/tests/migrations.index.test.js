@@ -17,7 +17,11 @@ describe('full migration registry', () => {
   it('applies every registered migration in order', () => {
     migrateUp(db, migrations);
 
-    expect(appliedMigrations(db)).toEqual(['001_create_patients', '002_create_scheduling']);
+    expect(appliedMigrations(db)).toEqual([
+      '001_create_patients',
+      '002_create_scheduling',
+      '003_add_doctor_location',
+    ]);
   });
 
   it('creates all scheduling tables with the expected columns', () => {
@@ -26,7 +30,7 @@ describe('full migration registry', () => {
     const tableInfo = (table) => db.prepare(`PRAGMA table_info(${table})`).all().map((c) => c.name);
 
     expect(tableInfo('doctors')).toEqual(
-      expect.arrayContaining(['id', 'name', 'department', 'slot_duration_minutes', 'buffer_minutes']),
+      expect.arrayContaining(['id', 'name', 'department', 'slot_duration_minutes', 'buffer_minutes', 'location']),
     );
     expect(tableInfo('doctor_working_hours')).toEqual(
       expect.arrayContaining(['id', 'doctor_id', 'day_of_week', 'start_time', 'end_time']),
@@ -50,8 +54,11 @@ describe('full migration registry', () => {
     );
   });
 
-  it('rolls the newest migration back first, then the next, in reverse order', () => {
+  it('rolls migrations back newest-first, in reverse order', () => {
     migrateUp(db, migrations);
+
+    expect(migrateDown(db, migrations)).toBe('003_add_doctor_location');
+    expect(appliedMigrations(db)).toEqual(['001_create_patients', '002_create_scheduling']);
 
     expect(migrateDown(db, migrations)).toBe('002_create_scheduling');
     expect(appliedMigrations(db)).toEqual(['001_create_patients']);

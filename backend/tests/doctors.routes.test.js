@@ -9,10 +9,17 @@ const WEDNESDAY = '2026-08-05';
 const WEDNESDAY_DOW = 3;
 
 function insertDoctor(db, overrides = {}) {
-  const doctor = { name: 'Dr. Smith', department: 'OPD', slot_duration_minutes: 30, buffer_minutes: 0, ...overrides };
+  const doctor = {
+    name: 'Dr. Smith',
+    department: 'OPD',
+    slot_duration_minutes: 30,
+    buffer_minutes: 0,
+    location: null,
+    ...overrides,
+  };
   const result = db
     .prepare(
-      'INSERT INTO doctors (name, department, slot_duration_minutes, buffer_minutes) VALUES (@name, @department, @slot_duration_minutes, @buffer_minutes)',
+      'INSERT INTO doctors (name, department, slot_duration_minutes, buffer_minutes, location) VALUES (@name, @department, @slot_duration_minutes, @buffer_minutes, @location)',
     )
     .run(doctor);
   return result.lastInsertRowid;
@@ -47,6 +54,18 @@ describe('Doctors API', () => {
 
       expect(response.status).toBe(200);
       expect(response.body).toHaveLength(2);
+    });
+
+    it('includes an explicit location when set, falling back to department otherwise', async () => {
+      insertDoctor(db, { name: 'Dr. Smith', department: 'OPD', location: 'Building A, Room 101' });
+      insertDoctor(db, { name: 'Dr. Lee', department: 'Cardiology' });
+
+      const response = await request(app).get('/api/doctors');
+
+      const smith = response.body.find((d) => d.name === 'Dr. Smith');
+      const lee = response.body.find((d) => d.name === 'Dr. Lee');
+      expect(smith.location).toBe('Building A, Room 101');
+      expect(lee.location).toBe('Cardiology');
     });
 
     it('filters doctors by department', async () => {

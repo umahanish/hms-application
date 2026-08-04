@@ -6,6 +6,7 @@ function toDoctor(row) {
     department: row.department,
     slotDurationMinutes: row.slot_duration_minutes,
     bufferMinutes: row.buffer_minutes,
+    location: row.location ?? row.department,
   };
 }
 

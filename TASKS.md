@@ -15,7 +15,7 @@ Rules:
 - [x] HMS-11: Doctor availability service (backend)
 - [x] HMS-10: Scheduling API (backend, depends on HMS-11)
 - [x] HMS-8: Booking calendar UI (frontend, depends on HMS-10)
-- [ ] HMS-9: Confirmation & reminder UI (frontend, depends on HMS-10)
+- [x] HMS-9: Confirmation & reminder UI (frontend, depends on HMS-10)
 
 ## Epic: Billing & Invoicing (HMS-3)
 - [ ] HMS-14: Billing/invoice API (backend)
