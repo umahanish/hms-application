@@ -22,6 +22,7 @@ describe('full migration registry', () => {
       '002_create_scheduling',
       '003_add_doctor_location',
       '004_create_billing',
+      '005_create_payments',
     ]);
   });
 
@@ -71,10 +72,31 @@ describe('full migration registry', () => {
     expect(tableInfo('invoice_line_items')).toEqual(
       expect.arrayContaining(['id', 'invoice_id', 'description', 'quantity', 'unit_price', 'amount']),
     );
+    expect(tableInfo('payments')).toEqual(
+      expect.arrayContaining([
+        'id',
+        'invoice_id',
+        'amount',
+        'method',
+        'gateway_reference',
+        'status',
+        'failure_reason',
+        'created_at',
+        'updated_at',
+      ]),
+    );
   });
 
   it('rolls migrations back newest-first, in reverse order', () => {
     migrateUp(db, migrations);
+
+    expect(migrateDown(db, migrations)).toBe('005_create_payments');
+    expect(appliedMigrations(db)).toEqual([
+      '001_create_patients',
+      '002_create_scheduling',
+      '003_add_doctor_location',
+      '004_create_billing',
+    ]);
 
     expect(migrateDown(db, migrations)).toBe('004_create_billing');
     expect(appliedMigrations(db)).toEqual([
