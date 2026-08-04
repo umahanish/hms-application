@@ -21,7 +21,7 @@ Rules:
 - [x] HMS-14: Billing/invoice API (backend)
 - [x] HMS-15: Payment processing service (backend, depends on HMS-14)
 - [x] HMS-12: Invoice generation UI (frontend, depends on HMS-14)
-- [ ] HMS-13: Payment status dashboard UI (frontend, depends on HMS-14, HMS-15)
+- [x] HMS-13: Payment status dashboard UI (frontend, depends on HMS-14, HMS-15)
 
 ## Final steps (after all above are checked off)
 - [ ] Code review pass against all Jira acceptance criteria

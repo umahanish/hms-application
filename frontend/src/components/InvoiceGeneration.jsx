@@ -3,9 +3,8 @@ import PatientSearch from './PatientSearch.jsx';
 import InvoiceList from './InvoiceList.jsx';
 import { generateInvoice, listInvoices } from '../api/billing.js';
 import { calculateInvoiceTotals } from '../utils/invoiceCalculator.js';
+import { DEPARTMENTS } from '../constants.js';
 import './InvoiceGeneration.css';
-
-const DEPARTMENTS = ['OPD', 'Cardiology', 'Lab', 'Pharmacy', 'General'];
 
 const PRESET_ITEMS = [
   { label: '+ Consultation', description: 'Consultation charge', unitPrice: 100 },

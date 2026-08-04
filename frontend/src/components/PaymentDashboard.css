@@ -1,0 +1,83 @@
+.payment-dashboard {
+  max-width: 720px;
+  margin: 0 auto;
+  padding: 1rem;
+}
+
+.dashboard-filters {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 1rem;
+  margin-bottom: 1rem;
+}
+
+.dashboard-filters .form-row {
+  display: flex;
+  flex-direction: column;
+}
+
+.dashboard-filters label {
+  font-weight: 600;
+  margin-bottom: 0.25rem;
+  font-size: 0.85rem;
+}
+
+.dashboard-filters select,
+.dashboard-filters input {
+  padding: 0.4rem;
+  border: 1px solid #ccc;
+  border-radius: 4px;
+}
+
+.dashboard-totals {
+  display: grid;
+  grid-template-columns: repeat(3, auto);
+  gap: 0.25rem 1.5rem;
+  margin-bottom: 1.5rem;
+}
+
+.dashboard-totals dt {
+  font-size: 0.85rem;
+  color: #57606a;
+}
+
+.dashboard-totals dd {
+  font-size: 1.25rem;
+  font-weight: 700;
+  margin: 0;
+}
+
+.dashboard-error {
+  color: #c62828;
+}
+
+.invoice-detail {
+  border: 1px solid #d0d7de;
+  border-radius: 8px;
+  padding: 1rem;
+}
+
+.payment-history {
+  list-style: none;
+  padding: 0;
+}
+
+.record-payment-form {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  flex-wrap: wrap;
+}
+
+.record-payment-form input,
+.record-payment-form select {
+  padding: 0.4rem;
+  border: 1px solid #ccc;
+  border-radius: 4px;
+}
+
+@media (min-width: 600px) {
+  .payment-dashboard {
+    max-width: 1000px;
+  }
+}
