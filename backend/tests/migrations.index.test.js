@@ -23,6 +23,7 @@ describe('full migration registry', () => {
       '003_add_doctor_location',
       '004_create_billing',
       '005_create_payments',
+      '006_add_invoice_department',
     ]);
   });
 
@@ -85,10 +86,20 @@ describe('full migration registry', () => {
         'updated_at',
       ]),
     );
+    expect(tableInfo('invoices')).toContain('department');
   });
 
   it('rolls migrations back newest-first, in reverse order', () => {
     migrateUp(db, migrations);
+
+    expect(migrateDown(db, migrations)).toBe('006_add_invoice_department');
+    expect(appliedMigrations(db)).toEqual([
+      '001_create_patients',
+      '002_create_scheduling',
+      '003_add_doctor_location',
+      '004_create_billing',
+      '005_create_payments',
+    ]);
 
     expect(migrateDown(db, migrations)).toBe('005_create_payments');
     expect(appliedMigrations(db)).toEqual([

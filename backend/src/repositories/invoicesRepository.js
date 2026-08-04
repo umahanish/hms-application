@@ -5,6 +5,7 @@ function toInvoice(row, lineItemRows) {
   return {
     id: row.id,
     patientId: row.patient_id,
+    department: row.department,
     idempotencyKey: row.idempotency_key,
     subtotal: row.subtotal,
     discountAmount: row.discount_amount,
@@ -34,7 +35,37 @@ export function findInvoiceById(db, id) {
 }
 
 export function findInvoicesByPatient(db, patientId) {
-  const rows = db.prepare('SELECT * FROM invoices WHERE patient_id = ? ORDER BY created_at DESC').all(patientId);
+  return findInvoices(db, { patientId });
+}
+
+/** Lists invoices, optionally filtered by patient, status, created-date range, and/or department. */
+export function findInvoices(db, { patientId, status, dateFrom, dateTo, department } = {}) {
+  const clauses = [];
+  const params = {};
+
+  if (patientId != null) {
+    clauses.push('patient_id = @patientId');
+    params.patientId = patientId;
+  }
+  if (status) {
+    clauses.push('status = @status');
+    params.status = status;
+  }
+  if (dateFrom) {
+    clauses.push('date(created_at) >= date(@dateFrom)');
+    params.dateFrom = dateFrom;
+  }
+  if (dateTo) {
+    clauses.push('date(created_at) <= date(@dateTo)');
+    params.dateTo = dateTo;
+  }
+  if (department) {
+    clauses.push('department = @department');
+    params.department = department;
+  }
+
+  const where = clauses.length > 0 ? `WHERE ${clauses.join(' AND ')}` : '';
+  const rows = db.prepare(`SELECT * FROM invoices ${where} ORDER BY created_at DESC`).all(params);
   return rows.map((row) => toInvoice(row, getLineItemRows(db, row.id)));
 }
 
@@ -45,7 +76,10 @@ export function findInvoicesByPatient(db, patientId) {
  * single synchronous transaction, so two requests with the same key can't race
  * their way into two invoices.
  */
-export function createInvoice(db, { patientId, lineItems, discountPercent = 0, taxPercent = 0, idempotencyKey }) {
+export function createInvoice(
+  db,
+  { patientId, lineItems, discountPercent = 0, taxPercent = 0, idempotencyKey, department },
+) {
   return db.transaction(() => {
     if (idempotencyKey) {
       const existing = db.prepare('SELECT id FROM invoices WHERE idempotency_key = ?').get(idempotencyKey);
@@ -58,10 +92,18 @@ export function createInvoice(db, { patientId, lineItems, discountPercent = 0, t
 
     const result = db
       .prepare(
-        `INSERT INTO invoices (patient_id, idempotency_key, subtotal, discount_amount, tax_amount, total)
-         VALUES (?, ?, ?, ?, ?, ?)`,
+        `INSERT INTO invoices (patient_id, department, idempotency_key, subtotal, discount_amount, tax_amount, total)
+         VALUES (?, ?, ?, ?, ?, ?, ?)`,
       )
-      .run(patientId, idempotencyKey ?? null, totals.subtotal, totals.discountAmount, totals.taxAmount, totals.total);
+      .run(
+        patientId,
+        department ?? null,
+        idempotencyKey ?? null,
+        totals.subtotal,
+        totals.discountAmount,
+        totals.taxAmount,
+        totals.total,
+      );
 
     const invoiceId = result.lastInsertRowid;
     const insertLineItem = db.prepare(

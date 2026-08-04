@@ -3,7 +3,7 @@ import { findPatientById } from '../repositories/patientsRepository.js';
 import {
   createInvoice,
   findInvoiceById,
-  findInvoicesByPatient,
+  findInvoices,
   updateInvoiceStatus,
 } from '../repositories/invoicesRepository.js';
 
@@ -35,7 +35,7 @@ export function createInvoicesRouter(db) {
   const router = Router();
 
   router.post('/', (req, res) => {
-    const { patientId, lineItems, discountPercent, taxPercent, idempotencyKey } = req.body;
+    const { patientId, lineItems, discountPercent, taxPercent, idempotencyKey, department } = req.body;
 
     const errors = validateLineItems(lineItems);
     if (!patientId) {
@@ -55,17 +55,31 @@ export function createInvoicesRouter(db) {
       discountPercent,
       taxPercent,
       idempotencyKey,
+      department,
     });
 
     return res.status(wasExisting ? 200 : 201).json(invoice);
   });
 
   router.get('/', (req, res) => {
-    const { patient } = req.query;
-    if (!patient) {
-      return res.status(400).json({ message: 'patient query parameter is required' });
+    const { patient, status, dateFrom, dateTo, department } = req.query;
+
+    if (status && !VALID_STATUSES.includes(status)) {
+      return res.status(400).json({
+        message: 'Validation failed',
+        errors: { status: `status must be one of ${VALID_STATUSES.join(', ')}` },
+      });
     }
-    return res.status(200).json(findInvoicesByPatient(db, Number(patient)));
+
+    return res.status(200).json(
+      findInvoices(db, {
+        patientId: patient != null ? Number(patient) : undefined,
+        status,
+        dateFrom,
+        dateTo,
+        department,
+      }),
+    );
   });
 
   router.get('/:id', (req, res) => {

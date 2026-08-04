@@ -124,9 +124,44 @@ describe('Billing & Invoice API', () => {
       expect(response.body).toHaveLength(2);
     });
 
-    it('returns 400 when the patient query parameter is missing', async () => {
+    it('returns every invoice when no filters are given, for the billing dashboard', async () => {
+      await request(app).post('/api/invoices').send({ patientId, lineItems: LINE_ITEMS });
+      await request(app).post('/api/invoices').send({ patientId, lineItems: LINE_ITEMS });
+
       const response = await request(app).get('/api/invoices');
+
+      expect(response.status).toBe(200);
+      expect(response.body).toHaveLength(2);
+    });
+
+    it('filters by status', async () => {
+      const created = await request(app).post('/api/invoices').send({ patientId, lineItems: LINE_ITEMS });
+      await request(app).put(`/api/invoices/${created.body.id}/status`).send({ status: 'paid' });
+      await request(app).post('/api/invoices').send({ patientId, lineItems: LINE_ITEMS });
+
+      const response = await request(app).get('/api/invoices').query({ status: 'paid' });
+
+      expect(response.status).toBe(200);
+      expect(response.body).toHaveLength(1);
+      expect(response.body[0].status).toBe('paid');
+    });
+
+    it('rejects an invalid status filter', async () => {
+      const response = await request(app).get('/api/invoices').query({ status: 'not-a-status' });
       expect(response.status).toBe(400);
+    });
+
+    it('filters by department', async () => {
+      await request(app).post('/api/invoices').send({ patientId, lineItems: LINE_ITEMS, department: 'OPD' });
+      await request(app)
+        .post('/api/invoices')
+        .send({ patientId, lineItems: LINE_ITEMS, department: 'Cardiology' });
+
+      const response = await request(app).get('/api/invoices').query({ department: 'Cardiology' });
+
+      expect(response.status).toBe(200);
+      expect(response.body).toHaveLength(1);
+      expect(response.body[0].department).toBe('Cardiology');
     });
   });
 
