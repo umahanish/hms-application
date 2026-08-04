@@ -121,6 +121,7 @@ export function getDoctorAvailability(db, doctorId, date, { excludeAppointmentId
     onLeave,
     isHoliday,
     slots,
+    bookedSlots: bookings.map((b) => ({ startTime: b.startTime, endTime: b.endTime })),
   };
 }
 

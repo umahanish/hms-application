@@ -103,6 +103,16 @@ describe('getDoctorAvailability', () => {
     expect(getDoctorAvailability(db, specialistDoctor, WEDNESDAY).slots).toHaveLength(1);
   });
 
+  it('includes bookedSlots so the UI can render both available and booked slots', () => {
+    const doctorId = insertDoctor(db);
+    insertWorkingHours(db, doctorId, WEDNESDAY_DOW, '09:00', '10:00');
+    insertAppointment(db, { doctorId, date: WEDNESDAY, startTime: '09:00', endTime: '09:30' });
+
+    const availability = getDoctorAvailability(db, doctorId, WEDNESDAY);
+
+    expect(availability.bookedSlots).toEqual([{ startTime: '09:00', endTime: '09:30' }]);
+  });
+
   it('excludes a given appointment from the booked list, e.g. when rescheduling it', () => {
     const doctorId = insertDoctor(db);
     insertWorkingHours(db, doctorId, WEDNESDAY_DOW, '09:00', '10:00');
