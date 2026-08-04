@@ -18,7 +18,7 @@ Rules:
 - [x] HMS-9: Confirmation & reminder UI (frontend, depends on HMS-10)
 
 ## Epic: Billing & Invoicing (HMS-3)
-- [ ] HMS-14: Billing/invoice API (backend)
+- [x] HMS-14: Billing/invoice API (backend)
 - [ ] HMS-15: Payment processing service (backend, depends on HMS-14)
 - [ ] HMS-12: Invoice generation UI (frontend, depends on HMS-14)
 - [ ] HMS-13: Payment status dashboard UI (frontend, depends on HMS-14, HMS-15)

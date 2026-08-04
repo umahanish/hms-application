@@ -2,6 +2,7 @@ import express from 'express';
 import { createPatientsRouter } from './routes/patients.js';
 import { createAppointmentsRouter } from './routes/appointments.js';
 import { createDoctorsRouter } from './routes/doctors.js';
+import { createInvoicesRouter } from './routes/invoices.js';
 
 export function createApp(db) {
   const app = express();
@@ -19,6 +20,7 @@ export function createApp(db) {
   app.use('/api/patients', createPatientsRouter(db));
   app.use('/api/appointments', createAppointmentsRouter(db));
   app.use('/api/doctors', createDoctorsRouter(db));
+  app.use('/api/invoices', createInvoicesRouter(db));
 
   // Malformed JSON bodies raise a SyntaxError from express.json() before any route runs.
   app.use((err, req, res, next) => {
