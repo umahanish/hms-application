@@ -28,9 +28,9 @@ export function updatePatient(patientId, patient) {
   });
 }
 
-export function searchPatients(query) {
-  const params = new URLSearchParams(query);
-  return request(`/patients/search?${params.toString()}`, {
+export function searchPatients(term) {
+  const params = new URLSearchParams({ search: term });
+  return request(`/patients?${params.toString()}`, {
     method: 'GET',
   });
 }

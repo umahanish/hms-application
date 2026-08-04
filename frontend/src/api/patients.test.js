@@ -1,5 +1,5 @@
 import { describe, expect, it, vi, beforeEach } from 'vitest';
-import { registerPatient, updatePatient, getPatient } from './patients.js';
+import { registerPatient, updatePatient, getPatient, searchPatients } from './patients.js';
 
 function mockFetchOnce(body, { ok = true, status = 200 } = {}) {
   global.fetch = vi.fn().mockResolvedValue({
@@ -46,6 +46,17 @@ describe('patients API client (contract with HMS-6 backend)', () => {
 
     const [url, options] = fetch.mock.calls[0];
     expect(url).toMatch(/\/patients\/1$/);
+    expect(options.method).toBe('GET');
+  });
+
+  it('searchPatients GETs /patients?search= per the HMS-6 contract', async () => {
+    mockFetchOnce([{ id: 1, firstName: 'Jane' }]);
+
+    await searchPatients('Jane');
+
+    const [url, options] = fetch.mock.calls[0];
+    expect(url).toMatch(/\/patients\?search=Jane$/);
+    expect(url).not.toMatch(/\/patients\/search/);
     expect(options.method).toBe('GET');
   });
 

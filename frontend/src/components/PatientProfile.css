@@ -1,0 +1,36 @@
+.patient-profile {
+  max-width: 640px;
+  margin: 0 auto;
+  padding: 1rem;
+}
+
+.profile-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+}
+
+.patient-profile dl {
+  display: grid;
+  grid-template-columns: auto 1fr;
+  column-gap: 1rem;
+  row-gap: 0.25rem;
+}
+
+.patient-profile dt {
+  font-weight: 600;
+}
+
+.profile-error {
+  color: #c62828;
+}
+
+.profile-empty {
+  color: #57606a;
+}
+
+@media (min-width: 600px) {
+  .patient-profile {
+    max-width: 900px;
+  }
+}
