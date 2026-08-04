@@ -13,7 +13,7 @@ Rules:
 
 ## Epic: Appointment Scheduling (HMS-2)
 - [x] HMS-11: Doctor availability service (backend)
-- [ ] HMS-10: Scheduling API (backend, depends on HMS-11)
+- [x] HMS-10: Scheduling API (backend, depends on HMS-11)
 - [ ] HMS-8: Booking calendar UI (frontend, depends on HMS-10)
 - [ ] HMS-9: Confirmation & reminder UI (frontend, depends on HMS-10)
 
