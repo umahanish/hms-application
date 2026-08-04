@@ -8,7 +8,7 @@ Rules:
 ## Epic: Patient Registration (HMS-1)
 - [x] HMS-7: DB schema & validation service (backend)
 - [x] HMS-6: Registration REST API (backend, depends on HMS-7)
-- [ ] HMS-4: Registration form UI (frontend, depends on HMS-6)
+- [x] HMS-4: Registration form UI (frontend, depends on HMS-6)
 - [ ] HMS-5: Search & profile view UI (frontend, depends on HMS-6)
 
 ## Epic: Appointment Scheduling (HMS-2)

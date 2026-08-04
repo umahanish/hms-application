@@ -5,6 +5,15 @@ export function createApp(db) {
   const app = express();
   app.use(express.json());
 
+  // Allows the Vite dev server (a different origin) to call this API directly.
+  app.use((req, res, next) => {
+    res.header('Access-Control-Allow-Origin', '*');
+    res.header('Access-Control-Allow-Methods', 'GET,POST,PUT,DELETE,OPTIONS');
+    res.header('Access-Control-Allow-Headers', 'Content-Type');
+    if (req.method === 'OPTIONS') return res.sendStatus(204);
+    return next();
+  });
+
   app.use('/api/patients', createPatientsRouter(db));
 
   // Malformed JSON bodies raise a SyntaxError from express.json() before any route runs.
