@@ -434,7 +434,96 @@ https://<username>.github.io/hms-application
 
 ---
 
-## 8. End-to-End Flow Summary
+## 8. SonarQube/SonarCloud Quality Gate Integration
+
+### One-time setup
+1. Create the project on [SonarCloud](https://sonarcloud.io) under your organization, bound to the GitHub repo.
+2. **Turn off Automatic Analysis**: Project → **Administration → Analysis Method** → disable "Automatic Analysis". SonarCloud's Automatic Analysis scans directly from GitHub with no CI step, but it can't run your test suites — so it never sees coverage data. CI-based analysis (below) is required to get coverage into the quality gate.
+3. Generate a SonarCloud token (My Account → Security) and add it as a GitHub Actions secret:
+   ```
+   gh secret set SONAR_TOKEN --repo <username>/hms-application --body "<token>"
+   ```
+
+### `sonar-project.properties` (repo root)
+```properties
+sonar.organization=<your-org>
+sonar.projectKey=<org>_hms-application
+sonar.projectName=hms-application
+
+sonar.sources=backend/src,frontend/src,shared
+sonar.tests=backend/tests,frontend/src
+sonar.test.inclusions=backend/tests/**,frontend/src/**/*.test.jsx,frontend/src/**/*.test.js
+sonar.exclusions=**/node_modules/**,**/dist/**,**/coverage/**,**/build/**
+
+sonar.javascript.lcov.reportPaths=backend/coverage/lcov.info,frontend/coverage/lcov.info
+sonar.sourceEncoding=UTF-8
+```
+
+### Coverage reporting
+Both `backend/vitest.config.js` and `frontend/vite.config.js` need lcov output for the quality gate to evaluate coverage:
+```js
+coverage: {
+  provider: 'v8',
+  reporter: ['lcov', 'text'],
+  reportsDirectory: './coverage',
+  allowExternal: true, // needed if any source lives outside this package (e.g. shared/)
+},
+```
+
+### Coverage path gotcha for shared/monorepo code
+If frontend and backend share code (e.g. `shared/patientValidation.js`), each package's lcov report references it via a relative `../shared/...` path. SonarCloud's coverage sensor cannot resolve a leading `..` against its indexed source files, so that file silently reports 0% coverage and can fail the new-code coverage condition. Fix: rewrite each lcov report's `SF:` paths to be relative to the repo root before scanning — see `scripts/normalize-lcov.js`, run in CI right before the scan step.
+
+### `.github/workflows/ci.yml` — `sonarcloud` job
+Runs after backend/frontend tests, downloads their coverage artifacts, normalizes the lcov paths, scans, and fails the build if the quality gate doesn't pass. `deploy` depends on it, so a failing quality gate blocks the GitHub Pages deploy:
+```yaml
+sonarcloud:
+  name: SonarCloud Quality Gate
+  needs: [backend, frontend]
+  runs-on: ubuntu-latest
+  steps:
+    - uses: actions/checkout@v4
+      with:
+        fetch-depth: 0
+    - uses: actions/setup-node@v4
+      with:
+        node-version: '20'
+    - uses: actions/download-artifact@v4
+      with:
+        name: backend-coverage
+        path: backend/coverage
+    - uses: actions/download-artifact@v4
+      with:
+        name: frontend-coverage
+        path: frontend/coverage
+    - name: Rewrite lcov paths relative to repo root
+      run: |
+        node scripts/normalize-lcov.js backend/coverage/lcov.info backend/
+        node scripts/normalize-lcov.js frontend/coverage/lcov.info frontend/
+    - uses: SonarSource/sonarqube-scan-action@v4
+      env:
+        SONAR_TOKEN: ${{ secrets.SONAR_TOKEN }}
+        SONAR_HOST_URL: https://sonarcloud.io
+    - name: Fail the build if the quality gate is not passed
+      uses: SonarSource/sonarqube-quality-gate-action@master
+      timeout-minutes: 5
+      env:
+        SONAR_TOKEN: ${{ secrets.SONAR_TOKEN }}
+```
+
+The backend/frontend jobs also need `--coverage` on their test runs and an `upload-artifact` step for `coverage/lcov.info` so the `sonarcloud` job can download it.
+
+### Kickoff prompt for Claude Code
+```
+Set up a SonarCloud quality gate for this repo: add lcov coverage reporting
+to both vitest configs, create sonar-project.properties, wire a sonarcloud
+job into ci.yml that scans and fails the build if the quality gate doesn't
+pass (deploy should depend on it), then run the pipeline and fix whatever
+the gate flags until it's green.
+```
+
+---
+
+## 9. End-to-End Flow Summary
 
 ```
 Jira story (HMS-4..15)
@@ -443,7 +532,8 @@ Jira story (HMS-4..15)
    → runs tests locally, fixes failures
    → code review pass against acceptance criteria
    → commit (referencing Jira key) + push to main
-   → ci.yml runs: backend tests → frontend tests/build → build gate → deploy
+   → ci.yml runs: backend tests → frontend tests/build →
+     SonarCloud scan + quality gate → deploy
    → GitHub Pages publishes frontend/build
    → live at https://<username>.github.io/hms-application
 ```
