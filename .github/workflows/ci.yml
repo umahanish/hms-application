@@ -62,6 +62,9 @@ jobs:
       - uses: actions/checkout@v4
         with:
           fetch-depth: 0
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20'
       - uses: actions/download-artifact@v4
         with:
           name: backend-coverage
@@ -70,6 +73,10 @@ jobs:
         with:
           name: frontend-coverage
           path: frontend/coverage
+      - name: Rewrite lcov paths relative to repo root
+        run: |
+          node scripts/normalize-lcov.js backend/coverage/lcov.info backend/
+          node scripts/normalize-lcov.js frontend/coverage/lcov.info frontend/
       - uses: SonarSource/sonarqube-scan-action@v4
         env:
           SONAR_TOKEN: ${{ secrets.SONAR_TOKEN }}
