@@ -29,6 +29,11 @@ export default function PatientRegistrationForm({ initialValues, patientId, onSu
 
   const isEditMode = Boolean(patientId);
 
+  let submitLabel = isEditMode ? 'Update Patient' : 'Register Patient';
+  if (status === 'submitting') {
+    submitLabel = 'Saving…';
+  }
+
   function handleChange(event) {
     const { name, value } = event.target;
     setValues((prev) => ({ ...prev, [name]: value }));
@@ -198,13 +203,13 @@ export default function PatientRegistrationForm({ initialValues, patientId, onSu
       </fieldset>
 
       <button type="submit" disabled={status === 'submitting'}>
-        {status === 'submitting' ? 'Saving…' : isEditMode ? 'Update Patient' : 'Register Patient'}
+        {submitLabel}
       </button>
 
       {status === 'success' && (
-        <p role="status" className="form-success">
+        <output className="form-success">
           Patient {isEditMode ? 'updated' : 'registered'} successfully.
-        </p>
+        </output>
       )}
 
       {status === 'error' && (

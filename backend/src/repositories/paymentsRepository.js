@@ -26,10 +26,16 @@ export function findPaymentsByInvoice(db, invoiceId) {
     .map(toPayment);
 }
 
+function invoiceStatusFor(amountPaid, total) {
+  if (amountPaid >= total) return 'paid';
+  if (amountPaid > 0) return 'partial';
+  return 'unpaid';
+}
+
 function applyPaymentToInvoice(db, invoiceId, amount) {
   const invoice = db.prepare('SELECT * FROM invoices WHERE id = ?').get(invoiceId);
   const newAmountPaid = round2(invoice.amount_paid + amount);
-  const newStatus = newAmountPaid >= invoice.total ? 'paid' : newAmountPaid > 0 ? 'partial' : 'unpaid';
+  const newStatus = invoiceStatusFor(newAmountPaid, invoice.total);
 
   db.prepare(
     `UPDATE invoices SET amount_paid = ?, status = ?, updated_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now') WHERE id = ?`,

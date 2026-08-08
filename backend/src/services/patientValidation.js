@@ -1,4 +1,4 @@
-const EMAIL_RE = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+const EMAIL_RE = /^[^\s@]{1,64}@[^\s@]{1,255}\.[^\s@]{2,24}$/;
 const PHONE_RE = /^\+?[0-9()\-\s]{7,20}$/;
 
 const REQUIRED_FIELDS = [

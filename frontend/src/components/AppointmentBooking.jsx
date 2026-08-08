@@ -96,7 +96,8 @@ export default function AppointmentBooking() {
   if (status === 'success' && confirmation) {
     const selectedDoctor = doctors.find((doctor) => doctor.id === confirmation.doctorId);
     return (
-      <div className="appointment-booking" role="status">
+      <div className="appointment-booking">
+        <output>Appointment confirmed, reference #APT-{confirmation.id}.</output>
         <h2>Appointment Confirmed</h2>
         <p className="confirmation-reference">Reference #APT-{confirmation.id}</p>
         <dl>

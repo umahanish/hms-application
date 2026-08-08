@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import PatientSearch from './PatientSearch.jsx';
 import InvoiceList from './InvoiceList.jsx';
 import { generateInvoice, listInvoices } from '../api/billing.js';
@@ -15,15 +15,15 @@ const PRESET_ITEMS = [
 const EMPTY_LINE_ITEM = { description: '', quantity: 1, unitPrice: 0 };
 
 function newIdempotencyKey() {
-  return typeof crypto !== 'undefined' && crypto.randomUUID
-    ? crypto.randomUUID()
-    : `inv-${Date.now()}-${Math.random().toString(36).slice(2)}`;
+  return crypto.randomUUID();
 }
 
 export default function InvoiceGeneration() {
   const [selectedPatient, setSelectedPatient] = useState(null);
   const [department, setDepartment] = useState('');
-  const [lineItems, setLineItems] = useState([{ ...EMPTY_LINE_ITEM }]);
+  const nextLineItemId = useRef(1);
+  const makeLineItem = (overrides) => ({ id: nextLineItemId.current++, ...EMPTY_LINE_ITEM, ...overrides });
+  const [lineItems, setLineItems] = useState([makeLineItem()]);
   const [discountPercent, setDiscountPercent] = useState(0);
   const [taxPercent, setTaxPercent] = useState(0);
   const [idempotencyKey, setIdempotencyKey] = useState(newIdempotencyKey);
@@ -49,7 +49,10 @@ export default function InvoiceGeneration() {
   }
 
   function addLineItem(preset) {
-    setLineItems((prev) => [...prev, preset ? { description: preset.description, quantity: 1, unitPrice: preset.unitPrice } : { ...EMPTY_LINE_ITEM }]);
+    setLineItems((prev) => [
+      ...prev,
+      preset ? makeLineItem({ description: preset.description, quantity: 1, unitPrice: preset.unitPrice }) : makeLineItem(),
+    ]);
   }
 
   function removeLineItem(index) {
@@ -59,7 +62,7 @@ export default function InvoiceGeneration() {
   function resetForNewInvoice() {
     setSelectedPatient(null);
     setDepartment('');
-    setLineItems([{ ...EMPTY_LINE_ITEM }]);
+    setLineItems([makeLineItem()]);
     setDiscountPercent(0);
     setTaxPercent(0);
     setIdempotencyKey(newIdempotencyKey());
@@ -146,7 +149,7 @@ export default function InvoiceGeneration() {
         </thead>
         <tbody>
           {lineItems.map((item, index) => (
-            <tr key={index}>
+            <tr key={item.id}>
               <td>
                 <input
                   aria-label={`Line item ${index + 1} description`}
@@ -240,7 +243,8 @@ export default function InvoiceGeneration() {
       </button>
 
       {status === 'success' && generatedInvoice && (
-        <div className="printable-invoice" role="status">
+        <div className="printable-invoice">
+          <output>Invoice INV-{generatedInvoice.id} generated successfully.</output>
           <h3>Invoice INV-{generatedInvoice.id}</h3>
           <p>
             Patient: {selectedPatient.firstName} {selectedPatient.lastName}

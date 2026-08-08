@@ -37,6 +37,8 @@
 }
 
 .form-success {
+  display: block;
+  margin-top: 0.5rem;
   color: #2e7d32;
 }
 
