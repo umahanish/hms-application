@@ -21,12 +21,16 @@ jobs:
           cache-dependency-path: backend/package-lock.json
       - run: npm ci
         working-directory: backend
-      - run: npx vitest run --coverage
+      - run: npx vitest run --coverage --reporter=default --reporter=json --outputFile=coverage/test-results.json
         working-directory: backend
       - uses: actions/upload-artifact@v4
         with:
           name: backend-coverage
           path: backend/coverage/lcov.info
+      - uses: actions/upload-artifact@v4
+        with:
+          name: backend-test-results
+          path: backend/coverage/test-results.json
 
   frontend:
     runs-on: ubuntu-latest
@@ -39,7 +43,7 @@ jobs:
           cache-dependency-path: frontend/package-lock.json
       - run: npm ci
         working-directory: frontend
-      - run: npx vitest run --coverage
+      - run: npx vitest run --coverage --reporter=default --reporter=json --outputFile=coverage/test-results.json
         working-directory: frontend
       - run: npm run build
         working-directory: frontend
@@ -53,6 +57,10 @@ jobs:
         with:
           name: frontend-coverage
           path: frontend/coverage/lcov.info
+      - uses: actions/upload-artifact@v4
+        with:
+          name: frontend-test-results
+          path: frontend/coverage/test-results.json
 
   sonarcloud:
     name: SonarCloud Quality Gate
@@ -87,9 +95,43 @@ jobs:
         env:
           SONAR_TOKEN: ${{ secrets.SONAR_TOKEN }}
 
+  test-cases:
+    name: Test Case Report
+    needs: [backend, frontend, sonarcloud]
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+      - uses: actions/download-artifact@v4
+        with:
+          name: backend-test-results
+          path: backend/coverage
+      - uses: actions/download-artifact@v4
+        with:
+          name: frontend-test-results
+          path: frontend/coverage
+      - name: Generate TestCases.csv and fail if any test case failed
+        run: node scripts/generate-test-cases.js
+        env:
+          SONAR_TOKEN: ${{ secrets.SONAR_TOKEN }}
+      - name: Commit updated TestCases.csv
+        if: always() && github.event_name == 'push'
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git add TestCases.csv
+          if ! git diff --staged --quiet; then
+            git commit -m "chore: update TestCases.csv [skip ci]"
+            git push
+          fi
+
   deploy:
     name: Deploy to GitHub Pages
-    needs: [frontend, backend, sonarcloud]
+    needs: [frontend, backend, sonarcloud, test-cases]
     if: github.ref == 'refs/heads/main' && github.event_name == 'push'
     runs-on: ubuntu-latest
     permissions:
