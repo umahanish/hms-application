@@ -537,3 +537,24 @@ Jira story (HMS-4..15)
    → GitHub Pages publishes frontend/build
    → live at https://<username>.github.io/hms-application
 ```
+
+---
+
+## 10. Showcase Log — work completed after initial setup
+
+This section is appended to (never rewritten) whenever a new piece of work lands, so this doc stays a true record of what the project actually is today, not just how it was originally scaffolded. `TASKS.md` is the day-to-day tracker; this is the durable "what shipped and why" summary. Whenever work here corresponds to Jira stories, they get transitioned out of **To Do** into **Resolved** (id `41` in this project's workflow) — a story isn't done if Jira still says otherwise.
+
+### 2026-08-10 — SingleStore persistence migration + RBAC
+
+**What:** Replaced the backend's `better-sqlite3` datastore with SingleStore (via `mysql2/promise`) across every repository — patients, doctors, appointments, invoices, payments. Added a versioned/reversible async migration runner (`backend/src/db/migrateSingleStore.js` + `backend/src/migrations-singlestore/`), and lightweight trusted-header RBAC (`backend/src/middleware/rbac.js`) gating patient/appointment endpoints to `front-desk|admin` and billing/payment endpoints to `billing-staff|admin`. The payment webhook is secured by a shared secret instead, since its caller is a gateway, not a logged-in user.
+
+**Why:** The `pool.js` SingleStore connection existed uncommitted and unused; asked whether to keep it as an isolated health-check module or do a full persistence swap — full migration was chosen. RBAC was scoped down from "build real auth" to a header-trust stopgap, since there's no login system in this app at all.
+
+**Notable engineering calls:**
+- Booking-conflict and invoice-idempotency safety, which used to come for free from better-sqlite3's synchronous same-process transactions, now uses a real `FOR UPDATE` doctor/day row lock and a DB `UNIQUE` constraint respectively, so they hold under real concurrent load against a networked DB.
+- Backend tests run against a purpose-built in-memory fake of the mysql2 pool (`backend/tests/helpers/fakePool.js`), including real per-key async lock queues, so the double-booking race test is testing the actual locking logic rather than a mock that hides it.
+- A live-SingleStore smoke test for `pingDatabase()` exists but is gated behind `DB_HOST` and skipped in CI — no DB secrets are configured there yet.
+
+**Known follow-ups (tracked in TASKS.md):** no real authentication system behind the RBAC headers; no automated test coverage against a live SingleStore instance in CI.
+
+**Verification:** 139 backend tests + 68 frontend tests passing, SonarCloud quality gate `OK`, CI green end-to-end including the Pages deploy. All 15 Jira issues (HMS-1 through HMS-15) transitioned from To Do to Resolved to reflect that the whole story set — including this migration — is actually done.
