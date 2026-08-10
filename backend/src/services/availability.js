@@ -61,32 +61,37 @@ export function computeAvailableSlots({
   return slots;
 }
 
-function getDoctor(db, doctorId) {
-  return db.prepare('SELECT * FROM doctors WHERE id = ?').get(doctorId);
+async function getDoctor(pool, doctorId) {
+  const [rows] = await pool.execute('SELECT * FROM doctors WHERE id = ?', [doctorId]);
+  return rows[0];
 }
 
-function getWorkingHoursForDay(db, doctorId, dayOfWeek) {
-  return db
-    .prepare(
-      'SELECT start_time as startTime, end_time as endTime FROM doctor_working_hours WHERE doctor_id = ? AND day_of_week = ? ORDER BY start_time',
-    )
-    .all(doctorId, dayOfWeek);
+async function getWorkingHoursForDay(pool, doctorId, dayOfWeek) {
+  const [rows] = await pool.execute(
+    'SELECT start_time as startTime, end_time as endTime FROM doctor_working_hours WHERE doctor_id = ? AND day_of_week = ? ORDER BY start_time',
+    [doctorId, dayOfWeek],
+  );
+  return rows;
 }
 
-function isDoctorOnLeave(db, doctorId, date) {
-  return Boolean(db.prepare('SELECT 1 FROM doctor_leave WHERE doctor_id = ? AND leave_date = ?').get(doctorId, date));
+async function isDoctorOnLeave(pool, doctorId, date) {
+  const [rows] = await pool.execute(
+    'SELECT 1 FROM doctor_leave WHERE doctor_id = ? AND leave_date = ?',
+    [doctorId, date],
+  );
+  return rows.length > 0;
 }
 
-function isHospitalHoliday(db, date) {
-  return Boolean(db.prepare('SELECT 1 FROM holidays WHERE holiday_date = ?').get(date));
+async function isHospitalHoliday(pool, date) {
+  const [rows] = await pool.execute('SELECT 1 FROM holidays WHERE holiday_date = ?', [date]);
+  return rows.length > 0;
 }
 
-function getBookings(db, doctorId, date, { excludeAppointmentId } = {}) {
-  const rows = db
-    .prepare(
-      "SELECT id, start_time as startTime, end_time as endTime FROM appointments WHERE doctor_id = ? AND appointment_date = ? AND status = 'booked'",
-    )
-    .all(doctorId, date);
+async function getBookings(pool, doctorId, date, { excludeAppointmentId } = {}) {
+  const [rows] = await pool.execute(
+    "SELECT id, start_time as startTime, end_time as endTime FROM appointments WHERE doctor_id = ? AND appointment_date = ? AND status = 'booked'",
+    [doctorId, date],
+  );
 
   return excludeAppointmentId == null ? rows : rows.filter((row) => row.id !== excludeAppointmentId);
 }
@@ -96,14 +101,16 @@ function dayOfWeekFor(date) {
 }
 
 /** Full availability picture for one doctor on one date: their per-department schedule minus leave/holidays/bookings. */
-export function getDoctorAvailability(db, doctorId, date, { excludeAppointmentId } = {}) {
-  const doctor = getDoctor(db, doctorId);
+export async function getDoctorAvailability(pool, doctorId, date, { excludeAppointmentId } = {}) {
+  const doctor = await getDoctor(pool, doctorId);
   if (!doctor) return null;
 
-  const onLeave = isDoctorOnLeave(db, doctorId, date);
-  const isHoliday = isHospitalHoliday(db, date);
-  const workingHours = getWorkingHoursForDay(db, doctorId, dayOfWeekFor(date));
-  const bookings = getBookings(db, doctorId, date, { excludeAppointmentId });
+  const [onLeave, isHoliday, workingHours, bookings] = await Promise.all([
+    isDoctorOnLeave(pool, doctorId, date),
+    isHospitalHoliday(pool, date),
+    getWorkingHoursForDay(pool, doctorId, dayOfWeekFor(date)),
+    getBookings(pool, doctorId, date, { excludeAppointmentId }),
+  ]);
 
   const slots = computeAvailableSlots({
     workingHours,
@@ -126,11 +133,11 @@ export function getDoctorAvailability(db, doctorId, date, { excludeAppointmentId
 }
 
 /** Whether a specific start/end time for a doctor on a date conflicts with an existing booking (buffer-aware). */
-export function hasConflict(db, doctorId, date, startTime, endTime, { excludeAppointmentId } = {}) {
-  const doctor = getDoctor(db, doctorId);
+export async function hasConflict(pool, doctorId, date, startTime, endTime, { excludeAppointmentId } = {}) {
+  const doctor = await getDoctor(pool, doctorId);
   if (!doctor) return true;
 
-  const bookings = getBookings(db, doctorId, date, { excludeAppointmentId });
+  const bookings = await getBookings(pool, doctorId, date, { excludeAppointmentId });
   const newStart = timeToMinutes(startTime);
   const newEnd = timeToMinutes(endTime);
 

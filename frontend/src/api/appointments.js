@@ -1,8 +1,12 @@
 const API_BASE = import.meta.env?.VITE_API_BASE_URL ?? '/api';
 
+// The backend gates appointment-write endpoints by role via this header. There's no
+// login screen yet, so this stands in for "the current front-desk user" -- see
+// TASKS.md for the real-auth follow-up. (The doctors/availability endpoints ignore
+// this header -- they carry no patient PII.)
 async function request(path, options) {
   const response = await fetch(`${API_BASE}${path}`, {
-    headers: { 'Content-Type': 'application/json' },
+    headers: { 'Content-Type': 'application/json', 'x-user-role': 'front-desk' },
     ...options,
   });
 

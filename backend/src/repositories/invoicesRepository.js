@@ -25,77 +25,81 @@ function toInvoice(row, lineItemRows) {
   };
 }
 
-function getLineItemRows(db, invoiceId) {
-  return db.prepare('SELECT * FROM invoice_line_items WHERE invoice_id = ? ORDER BY id').all(invoiceId);
+async function getLineItemRows(pool, invoiceId) {
+  const [rows] = await pool.execute('SELECT * FROM invoice_line_items WHERE invoice_id = ? ORDER BY id', [
+    invoiceId,
+  ]);
+  return rows;
 }
 
-export function findInvoiceById(db, id) {
-  const row = db.prepare('SELECT * FROM invoices WHERE id = ?').get(id);
-  return row ? toInvoice(row, getLineItemRows(db, id)) : null;
+export async function findInvoiceById(pool, id) {
+  const [rows] = await pool.execute('SELECT * FROM invoices WHERE id = ?', [id]);
+  const row = rows[0];
+  return row ? toInvoice(row, await getLineItemRows(pool, id)) : null;
 }
 
-export function findInvoicesByPatient(db, patientId) {
-  return findInvoices(db, { patientId });
+async function findInvoiceByIdempotencyKey(pool, idempotencyKey) {
+  const [rows] = await pool.execute('SELECT id FROM invoices WHERE idempotency_key = ?', [idempotencyKey]);
+  return rows[0] ? findInvoiceById(pool, rows[0].id) : null;
+}
+
+export async function findInvoicesByPatient(pool, patientId) {
+  return findInvoices(pool, { patientId });
 }
 
 /** Lists invoices, optionally filtered by patient, status, created-date range, and/or department. */
-export function findInvoices(db, { patientId, status, dateFrom, dateTo, department } = {}) {
+export async function findInvoices(pool, { patientId, status, dateFrom, dateTo, department } = {}) {
   const clauses = [];
-  const params = {};
+  const params = [];
 
   if (patientId != null) {
-    clauses.push('patient_id = @patientId');
-    params.patientId = patientId;
+    clauses.push('patient_id = ?');
+    params.push(patientId);
   }
   if (status) {
-    clauses.push('status = @status');
-    params.status = status;
+    clauses.push('status = ?');
+    params.push(status);
   }
   if (dateFrom) {
-    clauses.push('date(created_at) >= date(@dateFrom)');
-    params.dateFrom = dateFrom;
+    clauses.push('created_at >= ?');
+    params.push(dateFrom);
   }
   if (dateTo) {
-    clauses.push('date(created_at) <= date(@dateTo)');
-    params.dateTo = dateTo;
+    // created_at is an ISO-8601 string, not a DATE column, so pad to end-of-day for an inclusive dateTo.
+    clauses.push('created_at <= ?');
+    params.push(`${dateTo}T23:59:59.999Z`);
   }
   if (department) {
-    clauses.push('department = @department');
-    params.department = department;
+    clauses.push('department = ?');
+    params.push(department);
   }
 
   const where = clauses.length > 0 ? `WHERE ${clauses.join(' AND ')}` : '';
-  const rows = db.prepare(`SELECT * FROM invoices ${where} ORDER BY created_at DESC`).all(params);
-  return rows.map((row) => toInvoice(row, getLineItemRows(db, row.id)));
+  const [rows] = await pool.execute(`SELECT * FROM invoices ${where} ORDER BY created_at DESC`, params);
+  return Promise.all(rows.map(async (row) => toInvoice(row, await getLineItemRows(pool, row.id))));
 }
 
 /**
- * Creates an invoice from line items, computing subtotal/discount/tax/total.
- * When an idempotencyKey is supplied and already in use, returns the existing
- * invoice instead of creating a duplicate. The lookup and insert run inside a
- * single synchronous transaction, so two requests with the same key can't race
- * their way into two invoices.
+ * Creates an invoice from line items, computing subtotal/discount/tax/total, inside
+ * a transaction so the invoice row and its line items are written atomically. When
+ * an idempotencyKey collides with an existing invoice (UNIQUE constraint), the
+ * transaction rolls back and the existing invoice is returned instead of a duplicate.
  */
-export function createInvoice(
-  db,
+export async function createInvoice(
+  pool,
   { patientId, lineItems, discountPercent = 0, taxPercent = 0, idempotencyKey, department },
 ) {
-  return db.transaction(() => {
-    if (idempotencyKey) {
-      const existing = db.prepare('SELECT id FROM invoices WHERE idempotency_key = ?').get(idempotencyKey);
-      if (existing) {
-        return { invoice: findInvoiceById(db, existing.id), wasExisting: true };
-      }
-    }
+  const totals = calculateInvoiceTotals(lineItems, { discountPercent, taxPercent });
+  const now = new Date().toISOString();
 
-    const totals = calculateInvoiceTotals(lineItems, { discountPercent, taxPercent });
+  const connection = await pool.getConnection();
+  try {
+    await connection.beginTransaction();
 
-    const result = db
-      .prepare(
-        `INSERT INTO invoices (patient_id, department, idempotency_key, subtotal, discount_amount, tax_amount, total)
-         VALUES (?, ?, ?, ?, ?, ?, ?)`,
-      )
-      .run(
+    const [result] = await connection.execute(
+      `INSERT INTO invoices (patient_id, department, idempotency_key, subtotal, discount_amount, tax_amount, total, status, amount_paid, created_at, updated_at)
+       VALUES (?, ?, ?, ?, ?, ?, ?, 'unpaid', 0, ?, ?)`,
+      [
         patientId,
         department ?? null,
         idempotencyKey ?? null,
@@ -103,27 +107,46 @@ export function createInvoice(
         totals.discountAmount,
         totals.taxAmount,
         totals.total,
-      );
-
-    const invoiceId = result.lastInsertRowid;
-    const insertLineItem = db.prepare(
-      'INSERT INTO invoice_line_items (invoice_id, description, quantity, unit_price, amount) VALUES (?, ?, ?, ?, ?)',
+        now,
+        now,
+      ],
     );
+    const invoiceId = result.insertId;
+
+    const insertLineItemSql =
+      'INSERT INTO invoice_line_items (invoice_id, description, quantity, unit_price, amount) VALUES (?, ?, ?, ?, ?)';
     for (const item of lineItems) {
-      insertLineItem.run(invoiceId, item.description, item.quantity, item.unitPrice, round2(item.quantity * item.unitPrice));
+      await connection.execute(insertLineItemSql, [
+        invoiceId,
+        item.description,
+        item.quantity,
+        item.unitPrice,
+        round2(item.quantity * item.unitPrice),
+      ]);
     }
 
-    return { invoice: findInvoiceById(db, invoiceId), wasExisting: false };
-  })();
+    await connection.commit();
+    return { invoice: await findInvoiceById(pool, invoiceId), wasExisting: false };
+  } catch (error) {
+    await connection.rollback();
+    if (idempotencyKey && error.code === 'ER_DUP_ENTRY') {
+      const existing = await findInvoiceByIdempotencyKey(pool, idempotencyKey);
+      if (existing) {
+        return { invoice: existing, wasExisting: true };
+      }
+    }
+    throw error;
+  } finally {
+    connection.release();
+  }
 }
 
-export function updateInvoiceStatus(db, id, status) {
-  const existing = db.prepare('SELECT id FROM invoices WHERE id = ?').get(id);
-  if (!existing) return null;
+export async function updateInvoiceStatus(pool, id, status) {
+  const [existingRows] = await pool.execute('SELECT id FROM invoices WHERE id = ?', [id]);
+  if (!existingRows[0]) return null;
 
-  db.prepare(
-    `UPDATE invoices SET status = ?, updated_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now') WHERE id = ?`,
-  ).run(status, id);
+  const now = new Date().toISOString();
+  await pool.execute('UPDATE invoices SET status = ?, updated_at = ? WHERE id = ?', [status, now, id]);
 
-  return findInvoiceById(db, id);
+  return findInvoiceById(pool, id);
 }

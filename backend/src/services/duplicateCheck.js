@@ -10,11 +10,11 @@ function normalizePhone(value) {
  * Flags existing patients that look like duplicates of the given candidate,
  * matched on normalized first name + last name + DOB + phone.
  */
-export function findDuplicates(db, candidate, { excludeId } = {}) {
+export async function findDuplicates(pool, candidate, { excludeId } = {}) {
   const dob = candidate.dob;
   if (!dob) return [];
 
-  const rows = db.prepare('SELECT * FROM patients WHERE dob = ?').all(dob);
+  const [rows] = await pool.execute('SELECT * FROM patients WHERE dob = ?', [dob]);
 
   const candidateFirst = normalizeName(candidate.firstName);
   const candidateLast = normalizeName(candidate.lastName);

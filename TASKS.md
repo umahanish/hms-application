@@ -44,3 +44,52 @@ Rules:
 - [x] Push to main, verify ci.yml (including deploy job and SonarCloud
       quality gate) passes
 - [x] Confirm live GitHub Pages URL loads correctly
+
+## SingleStore DB Integration (in progress, uncommitted)
+- [x] Wire backend/src/db/pool.js (mysql2/promise pool, parameterized queries
+      only) into the app; add a pingDatabase() health check
+- [x] Document/create backend/db/setup/create_app_user.sql (DB user + grants
+      for SingleStore Helios) — file is gitignored, keep it out of the repo
+- [x] Commit backend/package.json, package-lock.json, .gitignore, and
+      src/db/pool.js together once wired and tested
+- [x] Unit tests for the db pool / health check
+
+## SingleStore DB Integration — full persistence migration (scope expanded per user decision)
+- [x] Replace better-sqlite3 with SingleStore across every repository
+      (patients, doctors, appointments, invoices, payments); removed the old
+      sqlite connection/migration files and the better-sqlite3 dependency
+- [x] Versioned, reversible async migration runner
+      (backend/src/db/migrateSingleStore.js) + 7 migrations under
+      backend/src/migrations-singlestore/, mirroring the old sqlite schema
+      history plus a new doctor_day_locks table
+- [x] Replaced the old single-process synchronous-transaction booking-conflict
+      guarantee (which only worked because better-sqlite3 ran in-process) with
+      a real doctor/day row lock (SELECT ... FOR UPDATE on doctor_day_locks)
+      so double-booking is still prevented against a real networked DB;
+      invoice idempotency now relies on the DB UNIQUE constraint + duplicate-
+      key catch instead of check-then-insert
+- [x] Lightweight trusted-header RBAC (backend/src/middleware/rbac.js): gates
+      patient/appointment endpoints to front-desk|admin and billing/payment
+      endpoints to billing-staff|admin; payment webhook is secured by a
+      shared secret (PAYMENT_WEBHOOK_SECRET) instead, since the caller is a
+      gateway, not a logged-in user. NOT a real auth system — there is no
+      login/session/identity model in this app; the frontend API clients
+      currently hardcode the role header since there's no login screen to
+      source it from. Follow-up: build real auth if this goes beyond a demo.
+- [x] Backend test suite rewritten against a purpose-built in-memory fake of
+      the mysql2 pool (backend/tests/helpers/fakePool.js) — including real
+      per-key async lock queues so the FOR UPDATE-based concurrency tests
+      (e.g. two simultaneous booking requests for the same slot) are
+      faithful, not just mocked-away. A live-SingleStore smoke test for
+      pingDatabase() exists (backend/tests/pool.integration.test.js) but is
+      skipped unless DB_HOST is set — CI does not currently set DB secrets,
+      so there is no automated test against the real database. Follow-up if
+      that coverage is wanted: add DB_HOST/USER/PASSWORD as CI secrets.
+- [x] Code review pass against Jira acceptance criteria + security checklist
+      for this migration specifically (SQL injection, hardcoded secrets,
+      missing validation, missing RBAC, test coverage gaps) — findings:
+      all queries confirmed parameterized (no string-built SQL), no
+      hardcoded secrets, RBAC covers every sensitive route; found and fixed
+      a real gap where appointments/invoices/payments routes had no
+      401/403 test coverage (only patients did) and rbac.js's "webhook not
+      configured" 503 branch was untested — added tests for both

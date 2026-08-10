@@ -1,8 +1,11 @@
 const API_BASE = import.meta.env?.VITE_API_BASE_URL ?? '/api';
 
+// The backend gates billing/payment endpoints by role via this header. There's no
+// login screen yet, so this stands in for "the current billing-staff user" -- see
+// TASKS.md for the real-auth follow-up.
 async function request(path, options) {
   const response = await fetch(`${API_BASE}${path}`, {
-    headers: { 'Content-Type': 'application/json' },
+    headers: { 'Content-Type': 'application/json', 'x-user-role': 'billing-staff' },
     ...options,
   });
 

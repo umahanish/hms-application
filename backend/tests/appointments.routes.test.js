@@ -1,9 +1,6 @@
-import { describe, expect, it, beforeEach, afterEach } from 'vitest';
+import { describe, expect, it, beforeEach } from 'vitest';
 import request from 'supertest';
-import { createConnection } from '../src/db/connection.js';
-import { migrateUp } from '../src/db/migrate.js';
-import { migrations } from '../src/migrations/index.js';
-import { createApp } from '../src/app.js';
+import { setupTestApp } from './helpers/setupTestApp.js';
 import { createPatient } from '../src/repositories/patientsRepository.js';
 
 const VALID_PATIENT = {
@@ -25,43 +22,55 @@ const VALID_PATIENT = {
 const WEDNESDAY = '2026-08-05';
 const WEDNESDAY_DOW = 3;
 
-function insertDoctor(db, overrides = {}) {
+async function insertDoctor(pool, overrides = {}) {
   const doctor = { name: 'Dr. Smith', department: 'OPD', slot_duration_minutes: 30, buffer_minutes: 0, ...overrides };
-  const result = db
-    .prepare(
-      'INSERT INTO doctors (name, department, slot_duration_minutes, buffer_minutes) VALUES (@name, @department, @slot_duration_minutes, @buffer_minutes)',
-    )
-    .run(doctor);
-  db.prepare('INSERT INTO doctor_working_hours (doctor_id, day_of_week, start_time, end_time) VALUES (?, ?, ?, ?)').run(
-    result.lastInsertRowid,
-    WEDNESDAY_DOW,
-    '09:00',
-    '12:00',
+  const [result] = await pool.execute(
+    'INSERT INTO doctors (name, department, slot_duration_minutes, buffer_minutes) VALUES (?, ?, ?, ?)',
+    [doctor.name, doctor.department, doctor.slot_duration_minutes, doctor.buffer_minutes],
   );
-  return result.lastInsertRowid;
+  await pool.execute(
+    'INSERT INTO doctor_working_hours (doctor_id, day_of_week, start_time, end_time) VALUES (?, ?, ?, ?)',
+    [result.insertId, WEDNESDAY_DOW, '09:00', '12:00'],
+  );
+  return result.insertId;
 }
 
 describe('Appointment Scheduling API', () => {
-  let db;
   let app;
   let patientId;
   let doctorId;
 
-  beforeEach(() => {
-    db = createConnection(':memory:');
-    migrateUp(db, migrations);
-    app = createApp(db);
-    patientId = createPatient(db, VALID_PATIENT).id;
-    doctorId = insertDoctor(db);
+  beforeEach(async () => {
+    const setup = await setupTestApp();
+    app = setup.app;
+    patientId = (await createPatient(setup.pool, VALID_PATIENT)).id;
+    doctorId = await insertDoctor(setup.pool);
   });
 
-  afterEach(() => {
-    db.close();
+  function agent() {
+    return {
+      get: (path) => request(app).get(path).set('x-user-role', 'front-desk'),
+      post: (path) => request(app).post(path).set('x-user-role', 'front-desk'),
+      put: (path) => request(app).put(path).set('x-user-role', 'front-desk'),
+      delete: (path) => request(app).delete(path).set('x-user-role', 'front-desk'),
+    };
+  }
+
+  describe('authorization', () => {
+    it('returns 401 without an x-user-role header', async () => {
+      const response = await request(app).get('/api/appointments');
+      expect(response.status).toBe(401);
+    });
+
+    it('returns 403 for a role that is not front-desk or admin', async () => {
+      const response = await request(app).get('/api/appointments').set('x-user-role', 'billing-staff');
+      expect(response.status).toBe(403);
+    });
   });
 
   describe('POST /api/appointments', () => {
     it('books an appointment and returns 201', async () => {
-      const response = await request(app)
+      const response = await agent()
         .post('/api/appointments')
         .send({ patientId, doctorId, date: WEDNESDAY, startTime: '09:00', endTime: '09:30' });
 
@@ -77,13 +86,13 @@ describe('Appointment Scheduling API', () => {
     });
 
     it('returns 400 with field errors when required fields are missing', async () => {
-      const response = await request(app).post('/api/appointments').send({ patientId, doctorId });
+      const response = await agent().post('/api/appointments').send({ patientId, doctorId });
       expect(response.status).toBe(400);
       expect(response.body.errors.date).toBeTruthy();
     });
 
     it('returns 400 when the patient does not exist', async () => {
-      const response = await request(app)
+      const response = await agent()
         .post('/api/appointments')
         .send({ patientId: 9999, doctorId, date: WEDNESDAY, startTime: '09:00', endTime: '09:30' });
       expect(response.status).toBe(400);
@@ -91,7 +100,7 @@ describe('Appointment Scheduling API', () => {
     });
 
     it('returns 400 when the doctor does not exist', async () => {
-      const response = await request(app)
+      const response = await agent()
         .post('/api/appointments')
         .send({ patientId, doctorId: 9999, date: WEDNESDAY, startTime: '09:00', endTime: '09:30' });
       expect(response.status).toBe(400);
@@ -99,11 +108,11 @@ describe('Appointment Scheduling API', () => {
     });
 
     it('rejects an overlapping booking with 409', async () => {
-      await request(app)
+      await agent()
         .post('/api/appointments')
         .send({ patientId, doctorId, date: WEDNESDAY, startTime: '09:00', endTime: '09:30' });
 
-      const response = await request(app)
+      const response = await agent()
         .post('/api/appointments')
         .send({ patientId, doctorId, date: WEDNESDAY, startTime: '09:15', endTime: '09:45' });
 
@@ -112,7 +121,7 @@ describe('Appointment Scheduling API', () => {
 
     it('does not double-book when two requests race for the same slot', async () => {
       const bookSameSlot = () =>
-        request(app)
+        agent()
           .post('/api/appointments')
           .send({ patientId, doctorId, date: WEDNESDAY, startTime: '10:00', endTime: '10:30' });
 
@@ -125,11 +134,11 @@ describe('Appointment Scheduling API', () => {
 
   describe('GET /api/appointments', () => {
     it('filters by doctor and date range', async () => {
-      await request(app)
+      await agent()
         .post('/api/appointments')
         .send({ patientId, doctorId, date: WEDNESDAY, startTime: '09:00', endTime: '09:30' });
 
-      const response = await request(app)
+      const response = await agent()
         .get('/api/appointments')
         .query({ doctorId, dateFrom: WEDNESDAY, dateTo: WEDNESDAY });
 
@@ -138,18 +147,18 @@ describe('Appointment Scheduling API', () => {
     });
 
     it('filters by patient', async () => {
-      await request(app)
+      await agent()
         .post('/api/appointments')
         .send({ patientId, doctorId, date: WEDNESDAY, startTime: '09:00', endTime: '09:30' });
 
-      const response = await request(app).get('/api/appointments').query({ patientId });
+      const response = await agent().get('/api/appointments').query({ patientId });
 
       expect(response.status).toBe(200);
       expect(response.body).toHaveLength(1);
     });
 
     it('returns an empty array when nothing matches the filters', async () => {
-      const response = await request(app).get('/api/appointments').query({ doctorId: 9999 });
+      const response = await agent().get('/api/appointments').query({ doctorId: 9999 });
       expect(response.status).toBe(200);
       expect(response.body).toEqual([]);
     });
@@ -157,11 +166,11 @@ describe('Appointment Scheduling API', () => {
 
   describe('PUT /api/appointments/:id (reschedule)', () => {
     it('reschedules an appointment to a new time', async () => {
-      const created = await request(app)
+      const created = await agent()
         .post('/api/appointments')
         .send({ patientId, doctorId, date: WEDNESDAY, startTime: '09:00', endTime: '09:30' });
 
-      const response = await request(app)
+      const response = await agent()
         .put(`/api/appointments/${created.body.id}`)
         .send({ date: WEDNESDAY, startTime: '10:00', endTime: '10:30' });
 
@@ -170,14 +179,14 @@ describe('Appointment Scheduling API', () => {
     });
 
     it('returns 409 when rescheduling into a slot that is already booked', async () => {
-      await request(app)
+      await agent()
         .post('/api/appointments')
         .send({ patientId, doctorId, date: WEDNESDAY, startTime: '10:00', endTime: '10:30' });
-      const toMove = await request(app)
+      const toMove = await agent()
         .post('/api/appointments')
         .send({ patientId, doctorId, date: WEDNESDAY, startTime: '09:00', endTime: '09:30' });
 
-      const response = await request(app)
+      const response = await agent()
         .put(`/api/appointments/${toMove.body.id}`)
         .send({ date: WEDNESDAY, startTime: '10:00', endTime: '10:30' });
 
@@ -185,19 +194,19 @@ describe('Appointment Scheduling API', () => {
     });
 
     it('returns 404 when rescheduling an appointment that does not exist', async () => {
-      const response = await request(app)
+      const response = await agent()
         .put('/api/appointments/9999')
         .send({ date: WEDNESDAY, startTime: '10:00', endTime: '10:30' });
       expect(response.status).toBe(404);
     });
 
     it('returns 409 when rescheduling a cancelled appointment', async () => {
-      const created = await request(app)
+      const created = await agent()
         .post('/api/appointments')
         .send({ patientId, doctorId, date: WEDNESDAY, startTime: '09:00', endTime: '09:30' });
-      await request(app).delete(`/api/appointments/${created.body.id}`);
+      await agent().delete(`/api/appointments/${created.body.id}`);
 
-      const response = await request(app)
+      const response = await agent()
         .put(`/api/appointments/${created.body.id}`)
         .send({ date: WEDNESDAY, startTime: '10:00', endTime: '10:30' });
 
@@ -207,23 +216,23 @@ describe('Appointment Scheduling API', () => {
 
   describe('DELETE /api/appointments/:id (cancellation)', () => {
     it('cancels an appointment and returns its updated status', async () => {
-      const created = await request(app)
+      const created = await agent()
         .post('/api/appointments')
         .send({ patientId, doctorId, date: WEDNESDAY, startTime: '09:00', endTime: '09:30' });
 
-      const response = await request(app).delete(`/api/appointments/${created.body.id}`);
+      const response = await agent().delete(`/api/appointments/${created.body.id}`);
 
       expect(response.status).toBe(200);
       expect(response.body.status).toBe('cancelled');
     });
 
     it('frees up the slot for a new booking after cancellation', async () => {
-      const created = await request(app)
+      const created = await agent()
         .post('/api/appointments')
         .send({ patientId, doctorId, date: WEDNESDAY, startTime: '09:00', endTime: '09:30' });
-      await request(app).delete(`/api/appointments/${created.body.id}`);
+      await agent().delete(`/api/appointments/${created.body.id}`);
 
-      const response = await request(app)
+      const response = await agent()
         .post('/api/appointments')
         .send({ patientId, doctorId, date: WEDNESDAY, startTime: '09:00', endTime: '09:30' });
 
@@ -231,7 +240,7 @@ describe('Appointment Scheduling API', () => {
     });
 
     it('returns 404 when cancelling an appointment that does not exist', async () => {
-      const response = await request(app).delete('/api/appointments/9999');
+      const response = await agent().delete('/api/appointments/9999');
       expect(response.status).toBe(404);
     });
   });

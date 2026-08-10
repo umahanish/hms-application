@@ -10,13 +10,14 @@ function toDoctor(row) {
   };
 }
 
-export function findDoctorById(db, id) {
-  return toDoctor(db.prepare('SELECT * FROM doctors WHERE id = ?').get(id));
+export async function findDoctorById(pool, id) {
+  const [rows] = await pool.execute('SELECT * FROM doctors WHERE id = ?', [id]);
+  return toDoctor(rows[0]);
 }
 
-export function listDoctors(db, { department } = {}) {
-  const rows = department
-    ? db.prepare('SELECT * FROM doctors WHERE department = ? ORDER BY name').all(department)
-    : db.prepare('SELECT * FROM doctors ORDER BY name').all();
+export async function listDoctors(pool, { department } = {}) {
+  const [rows] = department
+    ? await pool.execute('SELECT * FROM doctors WHERE department = ? ORDER BY name', [department])
+    : await pool.execute('SELECT * FROM doctors ORDER BY name');
   return rows.map(toDoctor);
 }

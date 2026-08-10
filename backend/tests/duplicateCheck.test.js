@@ -1,10 +1,10 @@
-import { describe, expect, it, beforeEach, afterEach } from 'vitest';
-import { createConnection } from '../src/db/connection.js';
-import { migrateUp } from '../src/db/migrate.js';
-import { migrations } from '../src/migrations/index.js';
+import { describe, expect, it, beforeEach } from 'vitest';
+import { createFakePool } from './helpers/fakePool.js';
+import { migrateUp } from '../src/db/migrateSingleStore.js';
+import { migrations } from '../src/migrations-singlestore/index.js';
 import { findDuplicates } from '../src/services/duplicateCheck.js';
 
-function insertPatient(db, overrides = {}) {
+async function insertPatient(pool, overrides = {}) {
   const patient = {
     first_name: 'Jane',
     last_name: 'Doe',
@@ -20,40 +20,55 @@ function insertPatient(db, overrides = {}) {
     insurance_policy_number: 'POL-12345',
     ...overrides,
   };
+  const now = new Date().toISOString();
 
-  const result = db
-    .prepare(
-      `INSERT INTO patients (first_name, last_name, dob, gender, phone, email, address_line1, city,
-        emergency_contact_name, emergency_contact_phone, insurance_provider, insurance_policy_number)
-       VALUES (@first_name, @last_name, @dob, @gender, @phone, @email, @address_line1, @city,
-        @emergency_contact_name, @emergency_contact_phone, @insurance_provider, @insurance_policy_number)`,
-    )
-    .run(patient);
+  const [result] = await pool.execute(
+    `INSERT INTO patients (first_name, last_name, dob, gender, phone, email, address_line1, city,
+      emergency_contact_name, emergency_contact_phone, insurance_provider, insurance_policy_number, created_at, updated_at)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+    [
+      patient.first_name,
+      patient.last_name,
+      patient.dob,
+      patient.gender,
+      patient.phone,
+      patient.email,
+      patient.address_line1,
+      patient.city,
+      patient.emergency_contact_name,
+      patient.emergency_contact_phone,
+      patient.insurance_provider,
+      patient.insurance_policy_number,
+      now,
+      now,
+    ],
+  );
 
-  return result.lastInsertRowid;
+  return result.insertId;
 }
 
 describe('findDuplicates', () => {
-  let db;
+  let pool;
 
-  beforeEach(() => {
-    db = createConnection(':memory:');
-    migrateUp(db, migrations);
+  beforeEach(async () => {
+    pool = createFakePool();
+    await migrateUp(pool, migrations);
   });
 
-  afterEach(() => {
-    db.close();
-  });
-
-  it('returns no matches when there are no patients', () => {
-    const matches = findDuplicates(db, { firstName: 'Jane', lastName: 'Doe', dob: '1990-01-01', phone: '555-123-4567' });
+  it('returns no matches when there are no patients', async () => {
+    const matches = await findDuplicates(pool, {
+      firstName: 'Jane',
+      lastName: 'Doe',
+      dob: '1990-01-01',
+      phone: '555-123-4567',
+    });
     expect(matches).toEqual([]);
   });
 
-  it('flags an exact name + DOB + phone match', () => {
-    insertPatient(db);
+  it('flags an exact name + DOB + phone match', async () => {
+    await insertPatient(pool);
 
-    const matches = findDuplicates(db, {
+    const matches = await findDuplicates(pool, {
       firstName: 'Jane',
       lastName: 'Doe',
       dob: '1990-01-01',
@@ -63,10 +78,10 @@ describe('findDuplicates', () => {
     expect(matches).toHaveLength(1);
   });
 
-  it('matches regardless of case and phone formatting differences', () => {
-    insertPatient(db);
+  it('matches regardless of case and phone formatting differences', async () => {
+    await insertPatient(pool);
 
-    const matches = findDuplicates(db, {
+    const matches = await findDuplicates(pool, {
       firstName: 'JANE',
       lastName: 'doe',
       dob: '1990-01-01',
@@ -76,10 +91,10 @@ describe('findDuplicates', () => {
     expect(matches).toHaveLength(1);
   });
 
-  it('does not flag patients with a different date of birth', () => {
-    insertPatient(db);
+  it('does not flag patients with a different date of birth', async () => {
+    await insertPatient(pool);
 
-    const matches = findDuplicates(db, {
+    const matches = await findDuplicates(pool, {
       firstName: 'Jane',
       lastName: 'Doe',
       dob: '1991-01-01',
@@ -89,10 +104,10 @@ describe('findDuplicates', () => {
     expect(matches).toEqual([]);
   });
 
-  it('does not flag patients whose name or phone differ', () => {
-    insertPatient(db);
+  it('does not flag patients whose name or phone differ', async () => {
+    await insertPatient(pool);
 
-    const matches = findDuplicates(db, {
+    const matches = await findDuplicates(pool, {
       firstName: 'Janet',
       lastName: 'Doe',
       dob: '1990-01-01',
@@ -102,11 +117,11 @@ describe('findDuplicates', () => {
     expect(matches).toEqual([]);
   });
 
-  it('excludes a given patient id, e.g. when updating that same record', () => {
-    const id = insertPatient(db);
+  it('excludes a given patient id, e.g. when updating that same record', async () => {
+    const id = await insertPatient(pool);
 
-    const matches = findDuplicates(
-      db,
+    const matches = await findDuplicates(
+      pool,
       { firstName: 'Jane', lastName: 'Doe', dob: '1990-01-01', phone: '555-123-4567' },
       { excludeId: id },
     );

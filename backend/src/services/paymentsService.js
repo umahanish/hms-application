@@ -26,15 +26,15 @@ const MAX_ATTEMPTS = 3; // 1 initial attempt + 2 retries on transient/timeout fa
  * failures up to MAX_ATTEMPTS. Every outcome — success, pending, or exhausted
  * failure — is written to the payments table as a transaction log entry.
  */
-export async function processPayment(db, { invoiceId, amount, method, simulate }) {
-  const invoice = findInvoiceById(db, invoiceId);
+export async function processPayment(pool, { invoiceId, amount, method, simulate }) {
+  const invoice = await findInvoiceById(pool, invoiceId);
   if (!invoice) {
     throw new InvoiceNotFoundError('Invoice not found');
   }
 
   if (method === 'cash') {
-    const payment = recordSucceededPayment(db, { invoiceId, amount, method, gatewayReference: null });
-    return { payment, invoice: findInvoiceById(db, invoiceId) };
+    const payment = await recordSucceededPayment(pool, { invoiceId, amount, method, gatewayReference: null });
+    return { payment, invoice: await findInvoiceById(pool, invoiceId) };
   }
 
   let lastError;
@@ -44,22 +44,22 @@ export async function processPayment(db, { invoiceId, amount, method, simulate }
       const result = await chargeGateway({ amount, method, simulate });
 
       if (result.status === 'pending') {
-        const payment = recordPendingPayment(db, {
+        const payment = await recordPendingPayment(pool, {
           invoiceId,
           amount,
           method,
           gatewayReference: result.gatewayReference,
         });
-        return { payment, invoice: findInvoiceById(db, invoiceId), attempts: attempt };
+        return { payment, invoice: await findInvoiceById(pool, invoiceId), attempts: attempt };
       }
 
-      const payment = recordSucceededPayment(db, {
+      const payment = await recordSucceededPayment(pool, {
         invoiceId,
         amount,
         method,
         gatewayReference: result.gatewayReference,
       });
-      return { payment, invoice: findInvoiceById(db, invoiceId), attempts: attempt };
+      return { payment, invoice: await findInvoiceById(pool, invoiceId), attempts: attempt };
     } catch (error) {
       lastError = error;
       const isRetryable = error instanceof GatewayError && error.retryable;
@@ -69,15 +69,15 @@ export async function processPayment(db, { invoiceId, amount, method, simulate }
     }
   }
 
-  recordFailedPayment(db, { invoiceId, amount, method, failureReason: lastError.message });
+  await recordFailedPayment(pool, { invoiceId, amount, method, failureReason: lastError.message });
   throw new PaymentDeclinedError(lastError.message, { retryable: lastError.retryable ?? false });
 }
 
 /** Applies an async payment gateway webhook/callback to the matching pending payment. */
-export function reconcileWebhookPayment(db, { gatewayReference, status, failureReason }) {
-  const payment = reconcilePendingPayment(db, gatewayReference, { status, failureReason });
+export async function reconcileWebhookPayment(pool, { gatewayReference, status, failureReason }) {
+  const payment = await reconcilePendingPayment(pool, gatewayReference, { status, failureReason });
   if (!payment) {
     throw new PaymentNotFoundError('No pending payment found for that gateway reference');
   }
-  return { payment, invoice: findInvoiceById(db, payment.invoiceId) };
+  return { payment, invoice: await findInvoiceById(pool, payment.invoiceId) };
 }

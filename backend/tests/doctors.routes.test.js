@@ -1,14 +1,11 @@
-import { describe, expect, it, beforeEach, afterEach } from 'vitest';
+import { describe, expect, it, beforeEach } from 'vitest';
 import request from 'supertest';
-import { createConnection } from '../src/db/connection.js';
-import { migrateUp } from '../src/db/migrate.js';
-import { migrations } from '../src/migrations/index.js';
-import { createApp } from '../src/app.js';
+import { setupTestApp } from './helpers/setupTestApp.js';
 
 const WEDNESDAY = '2026-08-05';
 const WEDNESDAY_DOW = 3;
 
-function insertDoctor(db, overrides = {}) {
+async function insertDoctor(pool, overrides = {}) {
   const doctor = {
     name: 'Dr. Smith',
     department: 'OPD',
@@ -17,38 +14,32 @@ function insertDoctor(db, overrides = {}) {
     location: null,
     ...overrides,
   };
-  const result = db
-    .prepare(
-      'INSERT INTO doctors (name, department, slot_duration_minutes, buffer_minutes, location) VALUES (@name, @department, @slot_duration_minutes, @buffer_minutes, @location)',
-    )
-    .run(doctor);
-  return result.lastInsertRowid;
+  const [result] = await pool.execute(
+    'INSERT INTO doctors (name, department, slot_duration_minutes, buffer_minutes, location) VALUES (?, ?, ?, ?, ?)',
+    [doctor.name, doctor.department, doctor.slot_duration_minutes, doctor.buffer_minutes, doctor.location],
+  );
+  return result.insertId;
 }
 
-function insertWorkingHours(db, doctorId, dayOfWeek, startTime, endTime) {
-  db.prepare(
+async function insertWorkingHours(pool, doctorId, dayOfWeek, startTime, endTime) {
+  await pool.execute(
     'INSERT INTO doctor_working_hours (doctor_id, day_of_week, start_time, end_time) VALUES (?, ?, ?, ?)',
-  ).run(doctorId, dayOfWeek, startTime, endTime);
+    [doctorId, dayOfWeek, startTime, endTime],
+  );
 }
 
 describe('Doctors API', () => {
-  let db;
   let app;
+  let pool;
 
-  beforeEach(() => {
-    db = createConnection(':memory:');
-    migrateUp(db, migrations);
-    app = createApp(db);
-  });
-
-  afterEach(() => {
-    db.close();
+  beforeEach(async () => {
+    ({ app, pool } = await setupTestApp());
   });
 
   describe('GET /api/doctors', () => {
     it('lists all doctors', async () => {
-      insertDoctor(db, { name: 'Dr. Smith', department: 'OPD' });
-      insertDoctor(db, { name: 'Dr. Lee', department: 'Cardiology' });
+      await insertDoctor(pool, { name: 'Dr. Smith', department: 'OPD' });
+      await insertDoctor(pool, { name: 'Dr. Lee', department: 'Cardiology' });
 
       const response = await request(app).get('/api/doctors');
 
@@ -57,8 +48,8 @@ describe('Doctors API', () => {
     });
 
     it('includes an explicit location when set, falling back to department otherwise', async () => {
-      insertDoctor(db, { name: 'Dr. Smith', department: 'OPD', location: 'Building A, Room 101' });
-      insertDoctor(db, { name: 'Dr. Lee', department: 'Cardiology' });
+      await insertDoctor(pool, { name: 'Dr. Smith', department: 'OPD', location: 'Building A, Room 101' });
+      await insertDoctor(pool, { name: 'Dr. Lee', department: 'Cardiology' });
 
       const response = await request(app).get('/api/doctors');
 
@@ -69,8 +60,8 @@ describe('Doctors API', () => {
     });
 
     it('filters doctors by department', async () => {
-      insertDoctor(db, { name: 'Dr. Smith', department: 'OPD' });
-      insertDoctor(db, { name: 'Dr. Lee', department: 'Cardiology' });
+      await insertDoctor(pool, { name: 'Dr. Smith', department: 'OPD' });
+      await insertDoctor(pool, { name: 'Dr. Lee', department: 'Cardiology' });
 
       const response = await request(app).get('/api/doctors').query({ department: 'Cardiology' });
 
@@ -82,8 +73,8 @@ describe('Doctors API', () => {
 
   describe('GET /api/doctors/:id/availability', () => {
     it('returns available slots for a given date', async () => {
-      const doctorId = insertDoctor(db, { slot_duration_minutes: 30 });
-      insertWorkingHours(db, doctorId, WEDNESDAY_DOW, '09:00', '10:00');
+      const doctorId = await insertDoctor(pool, { slot_duration_minutes: 30 });
+      await insertWorkingHours(pool, doctorId, WEDNESDAY_DOW, '09:00', '10:00');
 
       const response = await request(app)
         .get(`/api/doctors/${doctorId}/availability`)
@@ -97,7 +88,7 @@ describe('Doctors API', () => {
     });
 
     it('returns 400 when the date query parameter is missing', async () => {
-      const doctorId = insertDoctor(db);
+      const doctorId = await insertDoctor(pool);
       const response = await request(app).get(`/api/doctors/${doctorId}/availability`);
       expect(response.status).toBe(400);
     });

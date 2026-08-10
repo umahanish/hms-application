@@ -5,7 +5,7 @@ import { createDoctorsRouter } from './routes/doctors.js';
 import { createInvoicesRouter } from './routes/invoices.js';
 import { createPaymentsRouter } from './routes/payments.js';
 
-export function createApp(db) {
+export function createApp(pool) {
   const app = express();
   app.use(express.json());
 
@@ -13,16 +13,16 @@ export function createApp(db) {
   app.use((req, res, next) => {
     res.header('Access-Control-Allow-Origin', '*');
     res.header('Access-Control-Allow-Methods', 'GET,POST,PUT,DELETE,OPTIONS');
-    res.header('Access-Control-Allow-Headers', 'Content-Type');
+    res.header('Access-Control-Allow-Headers', 'Content-Type, x-user-role, x-webhook-secret');
     if (req.method === 'OPTIONS') return res.sendStatus(204);
     return next();
   });
 
-  app.use('/api/patients', createPatientsRouter(db));
-  app.use('/api/appointments', createAppointmentsRouter(db));
-  app.use('/api/doctors', createDoctorsRouter(db));
-  app.use('/api/invoices', createInvoicesRouter(db));
-  app.use('/api/payments', createPaymentsRouter(db));
+  app.use('/api/patients', createPatientsRouter(pool));
+  app.use('/api/appointments', createAppointmentsRouter(pool));
+  app.use('/api/doctors', createDoctorsRouter(pool));
+  app.use('/api/invoices', createInvoicesRouter(pool));
+  app.use('/api/payments', createPaymentsRouter(pool));
 
   // Malformed JSON bodies raise a SyntaxError from express.json() before any route runs.
   app.use((err, req, res, next) => {
@@ -34,6 +34,12 @@ export function createApp(db) {
 
   app.use((req, res) => {
     res.status(404).json({ message: 'Not found' });
+  });
+
+  // Central handler for errors thrown by async route handlers (e.g. unexpected DB failures).
+  app.use((err, req, res, next) => {
+    console.error(err);
+    res.status(500).json({ message: 'Internal server error' });
   });
 
   return app;

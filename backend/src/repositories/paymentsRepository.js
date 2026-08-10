@@ -15,15 +15,16 @@ function toPayment(row) {
   };
 }
 
-export function findPaymentById(db, id) {
-  return toPayment(db.prepare('SELECT * FROM payments WHERE id = ?').get(id));
+export async function findPaymentById(pool, id) {
+  const [rows] = await pool.execute('SELECT * FROM payments WHERE id = ?', [id]);
+  return toPayment(rows[0]);
 }
 
-export function findPaymentsByInvoice(db, invoiceId) {
-  return db
-    .prepare('SELECT * FROM payments WHERE invoice_id = ? ORDER BY created_at')
-    .all(invoiceId)
-    .map(toPayment);
+export async function findPaymentsByInvoice(pool, invoiceId) {
+  const [rows] = await pool.execute('SELECT * FROM payments WHERE invoice_id = ? ORDER BY created_at', [
+    invoiceId,
+  ]);
+  return rows.map(toPayment);
 }
 
 function invoiceStatusFor(amountPaid, total) {
@@ -32,77 +33,111 @@ function invoiceStatusFor(amountPaid, total) {
   return 'unpaid';
 }
 
-function applyPaymentToInvoice(db, invoiceId, amount) {
-  const invoice = db.prepare('SELECT * FROM invoices WHERE id = ?').get(invoiceId);
+/** Locks the invoice row (must run inside an open transaction on `connection`) before applying a payment amount. */
+async function applyPaymentToInvoice(connection, invoiceId, amount) {
+  const [rows] = await connection.execute('SELECT * FROM invoices WHERE id = ? FOR UPDATE', [invoiceId]);
+  const invoice = rows[0];
   const newAmountPaid = round2(invoice.amount_paid + amount);
   const newStatus = invoiceStatusFor(newAmountPaid, invoice.total);
+  const now = new Date().toISOString();
 
-  db.prepare(
-    `UPDATE invoices SET amount_paid = ?, status = ?, updated_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now') WHERE id = ?`,
-  ).run(newAmountPaid, newStatus, invoiceId);
+  await connection.execute('UPDATE invoices SET amount_paid = ?, status = ?, updated_at = ? WHERE id = ?', [
+    newAmountPaid,
+    newStatus,
+    now,
+    invoiceId,
+  ]);
 }
 
 /** Records a successful payment and applies it to the invoice's amount_paid/status atomically. */
-export function recordSucceededPayment(db, { invoiceId, amount, method, gatewayReference }) {
-  return db.transaction(() => {
-    const result = db
-      .prepare(
-        `INSERT INTO payments (invoice_id, amount, method, gateway_reference, status)
-         VALUES (?, ?, ?, ?, 'succeeded')`,
-      )
-      .run(invoiceId, amount, method, gatewayReference ?? null);
+export async function recordSucceededPayment(pool, { invoiceId, amount, method, gatewayReference }) {
+  const connection = await pool.getConnection();
+  try {
+    await connection.beginTransaction();
 
-    applyPaymentToInvoice(db, invoiceId, amount);
-    return findPaymentById(db, result.lastInsertRowid);
-  })();
+    const now = new Date().toISOString();
+    const [result] = await connection.execute(
+      `INSERT INTO payments (invoice_id, amount, method, gateway_reference, status, created_at, updated_at)
+       VALUES (?, ?, ?, ?, 'succeeded', ?, ?)`,
+      [invoiceId, amount, method, gatewayReference ?? null, now, now],
+    );
+
+    await applyPaymentToInvoice(connection, invoiceId, amount);
+
+    await connection.commit();
+    return await findPaymentById(pool, result.insertId);
+  } catch (error) {
+    await connection.rollback();
+    throw error;
+  } finally {
+    connection.release();
+  }
 }
 
 /** Records a payment awaiting async gateway confirmation; the invoice is not touched until the webhook resolves it. */
-export function recordPendingPayment(db, { invoiceId, amount, method, gatewayReference }) {
-  const result = db
-    .prepare(
-      `INSERT INTO payments (invoice_id, amount, method, gateway_reference, status)
-       VALUES (?, ?, ?, ?, 'pending')`,
-    )
-    .run(invoiceId, amount, method, gatewayReference ?? null);
+export async function recordPendingPayment(pool, { invoiceId, amount, method, gatewayReference }) {
+  const now = new Date().toISOString();
+  const [result] = await pool.execute(
+    `INSERT INTO payments (invoice_id, amount, method, gateway_reference, status, created_at, updated_at)
+     VALUES (?, ?, ?, ?, 'pending', ?, ?)`,
+    [invoiceId, amount, method, gatewayReference ?? null, now, now],
+  );
 
-  return findPaymentById(db, result.lastInsertRowid);
+  return findPaymentById(pool, result.insertId);
 }
 
-export function recordFailedPayment(db, { invoiceId, amount, method, gatewayReference, failureReason }) {
-  const result = db
-    .prepare(
-      `INSERT INTO payments (invoice_id, amount, method, gateway_reference, status, failure_reason)
-       VALUES (?, ?, ?, ?, 'failed', ?)`,
-    )
-    .run(invoiceId, amount, method, gatewayReference ?? null, failureReason ?? null);
+export async function recordFailedPayment(pool, { invoiceId, amount, method, gatewayReference, failureReason }) {
+  const now = new Date().toISOString();
+  const [result] = await pool.execute(
+    `INSERT INTO payments (invoice_id, amount, method, gateway_reference, status, failure_reason, created_at, updated_at)
+     VALUES (?, ?, ?, ?, 'failed', ?, ?, ?)`,
+    [invoiceId, amount, method, gatewayReference ?? null, failureReason ?? null, now, now],
+  );
 
-  return findPaymentById(db, result.lastInsertRowid);
+  return findPaymentById(pool, result.insertId);
 }
 
 /**
  * Resolves a pending payment from an async webhook/callback: on success, applies
  * it to the invoice; on failure, marks it failed. Returns null if no pending
- * payment matches the gateway reference (already resolved, or unknown).
+ * payment matches the gateway reference (already resolved, or unknown). Locks the
+ * payment row first so two concurrent webhook deliveries can't double-apply it.
  */
-export function reconcilePendingPayment(db, gatewayReference, { status, failureReason }) {
-  return db.transaction(() => {
-    const row = db
-      .prepare(`SELECT * FROM payments WHERE gateway_reference = ? AND status = 'pending'`)
-      .get(gatewayReference);
-    if (!row) return null;
+export async function reconcilePendingPayment(pool, gatewayReference, { status, failureReason }) {
+  const connection = await pool.getConnection();
+  try {
+    await connection.beginTransaction();
 
-    if (status === 'succeeded') {
-      db.prepare(
-        `UPDATE payments SET status = 'succeeded', updated_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now') WHERE id = ?`,
-      ).run(row.id);
-      applyPaymentToInvoice(db, row.invoice_id, row.amount);
-    } else {
-      db.prepare(
-        `UPDATE payments SET status = 'failed', failure_reason = ?, updated_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now') WHERE id = ?`,
-      ).run(failureReason ?? null, row.id);
+    const [rows] = await connection.execute(
+      `SELECT * FROM payments WHERE gateway_reference = ? AND status = 'pending' FOR UPDATE`,
+      [gatewayReference],
+    );
+    const row = rows[0];
+    if (!row) {
+      await connection.commit();
+      return null;
     }
 
-    return findPaymentById(db, row.id);
-  })();
+    const now = new Date().toISOString();
+    if (status === 'succeeded') {
+      await connection.execute(`UPDATE payments SET status = 'succeeded', updated_at = ? WHERE id = ?`, [
+        now,
+        row.id,
+      ]);
+      await applyPaymentToInvoice(connection, row.invoice_id, row.amount);
+    } else {
+      await connection.execute(
+        `UPDATE payments SET status = 'failed', failure_reason = ?, updated_at = ? WHERE id = ?`,
+        [failureReason ?? null, now, row.id],
+      );
+    }
+
+    await connection.commit();
+    return await findPaymentById(pool, row.id);
+  } catch (error) {
+    await connection.rollback();
+    throw error;
+  } finally {
+    connection.release();
+  }
 }

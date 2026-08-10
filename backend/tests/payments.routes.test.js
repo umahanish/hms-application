@@ -1,9 +1,6 @@
-import { describe, expect, it, beforeEach, afterEach } from 'vitest';
+import { describe, expect, it, beforeEach } from 'vitest';
 import request from 'supertest';
-import { createConnection } from '../src/db/connection.js';
-import { migrateUp } from '../src/db/migrate.js';
-import { migrations } from '../src/migrations/index.js';
-import { createApp } from '../src/app.js';
+import { setupTestApp } from './helpers/setupTestApp.js';
 import { createPatient } from '../src/repositories/patientsRepository.js';
 import { createInvoice } from '../src/repositories/invoicesRepository.js';
 
@@ -22,30 +19,55 @@ const VALID_PATIENT = {
   insurancePolicyNumber: 'POL-12345',
 };
 
+const WEBHOOK_SECRET = 'test-webhook-secret';
+
 describe('Payment Processing API', () => {
-  let db;
   let app;
   let invoiceId;
 
-  beforeEach(() => {
-    db = createConnection(':memory:');
-    migrateUp(db, migrations);
-    app = createApp(db);
-    const patientId = createPatient(db, VALID_PATIENT).id;
-    const { invoice } = createInvoice(db, {
+  beforeEach(async () => {
+    process.env.PAYMENT_WEBHOOK_SECRET = WEBHOOK_SECRET;
+    const setup = await setupTestApp();
+    app = setup.app;
+    const patientId = (await createPatient(setup.pool, VALID_PATIENT)).id;
+    const { invoice } = await createInvoice(setup.pool, {
       patientId,
       lineItems: [{ description: 'Consultation', quantity: 1, unitPrice: 100 }],
     });
     invoiceId = invoice.id;
   });
 
-  afterEach(() => {
-    db.close();
+  function agent() {
+    return {
+      get: (path) => request(app).get(path).set('x-user-role', 'billing-staff'),
+      post: (path) => request(app).post(path).set('x-user-role', 'billing-staff'),
+    };
+  }
+
+  function webhookAgent() {
+    return {
+      post: (path) => request(app).post(path).set('x-webhook-secret', WEBHOOK_SECRET),
+    };
+  }
+
+  describe('authorization', () => {
+    it('returns 401 without an x-user-role header', async () => {
+      const response = await request(app).get('/api/payments').query({ invoiceId });
+      expect(response.status).toBe(401);
+    });
+
+    it('returns 403 for a role that is not billing-staff or admin', async () => {
+      const response = await request(app)
+        .get('/api/payments')
+        .query({ invoiceId })
+        .set('x-user-role', 'front-desk');
+      expect(response.status).toBe(403);
+    });
   });
 
   describe('POST /api/payments', () => {
     it('processes a successful card payment and updates the invoice', async () => {
-      const response = await request(app).post('/api/payments').send({ invoiceId, amount: 100, method: 'card' });
+      const response = await agent().post('/api/payments').send({ invoiceId, amount: 100, method: 'card' });
 
       expect(response.status).toBe(201);
       expect(response.body.payment.status).toBe('succeeded');
@@ -53,7 +75,7 @@ describe('Payment Processing API', () => {
     });
 
     it('records a cash payment without a gateway call', async () => {
-      const response = await request(app).post('/api/payments').send({ invoiceId, amount: 100, method: 'cash' });
+      const response = await agent().post('/api/payments').send({ invoiceId, amount: 100, method: 'cash' });
 
       expect(response.status).toBe(201);
       expect(response.body.payment.method).toBe('cash');
@@ -61,34 +83,34 @@ describe('Payment Processing API', () => {
     });
 
     it('returns 400 for validation errors', async () => {
-      const response = await request(app).post('/api/payments').send({ invoiceId, amount: -5, method: 'bogus' });
+      const response = await agent().post('/api/payments').send({ invoiceId, amount: -5, method: 'bogus' });
       expect(response.status).toBe(400);
       expect(response.body.errors.amount).toBeTruthy();
       expect(response.body.errors.method).toBeTruthy();
     });
 
     it('returns 400 when the invoice does not exist', async () => {
-      const response = await request(app)
+      const response = await agent()
         .post('/api/payments')
         .send({ invoiceId: 9999, amount: 100, method: 'card' });
       expect(response.status).toBe(400);
     });
 
     it('returns 402 with a clear, non-retryable error on decline and logs the failure', async () => {
-      const response = await request(app)
+      const response = await agent()
         .post('/api/payments')
         .send({ invoiceId, amount: 100, method: 'card', simulate: 'decline' });
 
       expect(response.status).toBe(402);
       expect(response.body.retryable).toBe(false);
 
-      const log = await request(app).get('/api/payments').query({ invoiceId });
+      const log = await agent().get('/api/payments').query({ invoiceId });
       expect(log.body).toHaveLength(1);
       expect(log.body[0].status).toBe('failed');
     });
 
     it('returns 402 with retryable:true after exhausting retries on repeated timeouts', async () => {
-      const response = await request(app)
+      const response = await agent()
         .post('/api/payments')
         .send({ invoiceId, amount: 100, method: 'card', simulate: 'timeout' });
 
@@ -97,7 +119,7 @@ describe('Payment Processing API', () => {
     });
 
     it('records a pending payment for an async gateway without updating the invoice yet', async () => {
-      const response = await request(app)
+      const response = await agent()
         .post('/api/payments')
         .send({ invoiceId, amount: 100, method: 'upi', simulate: 'pending' });
 
@@ -108,12 +130,28 @@ describe('Payment Processing API', () => {
   });
 
   describe('POST /api/payments/webhook', () => {
+    it('returns 401 without the webhook secret header', async () => {
+      const response = await request(app)
+        .post('/api/payments/webhook')
+        .send({ gatewayReference: 'gw_x', status: 'succeeded' });
+      expect(response.status).toBe(401);
+    });
+
+    it('returns 503 when PAYMENT_WEBHOOK_SECRET is not configured server-side', async () => {
+      delete process.env.PAYMENT_WEBHOOK_SECRET;
+      const response = await request(app)
+        .post('/api/payments/webhook')
+        .set('x-webhook-secret', WEBHOOK_SECRET)
+        .send({ gatewayReference: 'gw_x', status: 'succeeded' });
+      expect(response.status).toBe(503);
+    });
+
     it('reconciles a pending payment to succeeded and updates the invoice', async () => {
-      const pending = await request(app)
+      const pending = await agent()
         .post('/api/payments')
         .send({ invoiceId, amount: 100, method: 'upi', simulate: 'pending' });
 
-      const webhook = await request(app).post('/api/payments/webhook').send({
+      const webhook = await webhookAgent().post('/api/payments/webhook').send({
         gatewayReference: pending.body.payment.gatewayReference,
         status: 'succeeded',
       });
@@ -124,11 +162,11 @@ describe('Payment Processing API', () => {
     });
 
     it('reconciles a pending payment to failed without touching the invoice', async () => {
-      const pending = await request(app)
+      const pending = await agent()
         .post('/api/payments')
         .send({ invoiceId, amount: 100, method: 'upi', simulate: 'pending' });
 
-      const webhook = await request(app).post('/api/payments/webhook').send({
+      const webhook = await webhookAgent().post('/api/payments/webhook').send({
         gatewayReference: pending.body.payment.gatewayReference,
         status: 'failed',
         failureReason: 'Card declined post-authorization',
@@ -140,24 +178,24 @@ describe('Payment Processing API', () => {
     });
 
     it('returns 404 for an unknown gateway reference', async () => {
-      const response = await request(app)
+      const response = await webhookAgent()
         .post('/api/payments/webhook')
         .send({ gatewayReference: 'gw_unknown', status: 'succeeded' });
       expect(response.status).toBe(404);
     });
 
     it('returns 400 for an invalid webhook payload', async () => {
-      const response = await request(app).post('/api/payments/webhook').send({ status: 'succeeded' });
+      const response = await webhookAgent().post('/api/payments/webhook').send({ status: 'succeeded' });
       expect(response.status).toBe(400);
     });
   });
 
   describe('GET /api/payments?invoiceId=', () => {
     it('returns the full transaction log for an invoice, including failed attempts', async () => {
-      await request(app).post('/api/payments').send({ invoiceId, amount: 100, method: 'card', simulate: 'decline' });
-      await request(app).post('/api/payments').send({ invoiceId, amount: 100, method: 'card' });
+      await agent().post('/api/payments').send({ invoiceId, amount: 100, method: 'card', simulate: 'decline' });
+      await agent().post('/api/payments').send({ invoiceId, amount: 100, method: 'card' });
 
-      const response = await request(app).get('/api/payments').query({ invoiceId });
+      const response = await agent().get('/api/payments').query({ invoiceId });
 
       expect(response.status).toBe(200);
       expect(response.body).toHaveLength(2);
@@ -165,7 +203,7 @@ describe('Payment Processing API', () => {
     });
 
     it('returns 400 when invoiceId query parameter is missing', async () => {
-      const response = await request(app).get('/api/payments');
+      const response = await agent().get('/api/payments');
       expect(response.status).toBe(400);
     });
   });

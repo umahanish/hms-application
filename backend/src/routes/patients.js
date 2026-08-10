@@ -7,71 +7,88 @@ import {
   findPatientById,
   searchPatients,
 } from '../repositories/patientsRepository.js';
+import { requireRole, ROLES } from '../middleware/rbac.js';
+import { asyncHandler } from './asyncHandler.js';
 
-export function createPatientsRouter(db) {
+const canAccessPatients = requireRole(ROLES.FRONT_DESK, ROLES.ADMIN);
+
+export function createPatientsRouter(pool) {
   const router = Router();
+  router.use(canAccessPatients);
 
-  router.post('/', (req, res) => {
-    const errors = validatePatient(req.body);
-    if (Object.keys(errors).length > 0) {
-      return res.status(400).json({ message: 'Validation failed', errors });
-    }
+  router.post(
+    '/',
+    asyncHandler(async (req, res) => {
+      const errors = validatePatient(req.body);
+      if (Object.keys(errors).length > 0) {
+        return res.status(400).json({ message: 'Validation failed', errors });
+      }
 
-    const duplicates = findDuplicates(db, req.body);
-    const patient = createPatient(db, req.body);
+      const duplicates = await findDuplicates(pool, req.body);
+      const patient = await createPatient(pool, req.body);
 
-    return res.status(201).json({
-      ...patient,
-      duplicateWarning: duplicates.length > 0,
-    });
-  });
+      return res.status(201).json({
+        ...patient,
+        duplicateWarning: duplicates.length > 0,
+      });
+    }),
+  );
 
-  router.get('/', (req, res) => {
-    const { search } = req.query;
-    if (typeof search !== 'string' || search.trim().length === 0) {
-      return res.status(400).json({ message: 'search query parameter is required' });
-    }
+  router.get(
+    '/',
+    asyncHandler(async (req, res) => {
+      const { search } = req.query;
+      if (typeof search !== 'string' || search.trim().length === 0) {
+        return res.status(400).json({ message: 'search query parameter is required' });
+      }
 
-    const patients = searchPatients(db, search.trim());
-    return res.status(200).json(patients);
-  });
+      const patients = await searchPatients(pool, search.trim());
+      return res.status(200).json(patients);
+    }),
+  );
 
-  router.get('/:id', (req, res) => {
-    const id = Number(req.params.id);
-    if (!Number.isInteger(id)) {
-      return res.status(400).json({ message: 'Invalid patient id' });
-    }
+  router.get(
+    '/:id',
+    asyncHandler(async (req, res) => {
+      const id = Number(req.params.id);
+      if (!Number.isInteger(id)) {
+        return res.status(400).json({ message: 'Invalid patient id' });
+      }
 
-    const patient = findPatientById(db, id);
-    if (!patient) {
-      return res.status(404).json({ message: 'Patient not found' });
-    }
+      const patient = await findPatientById(pool, id);
+      if (!patient) {
+        return res.status(404).json({ message: 'Patient not found' });
+      }
 
-    return res.status(200).json(patient);
-  });
+      return res.status(200).json(patient);
+    }),
+  );
 
-  router.put('/:id', (req, res) => {
-    const id = Number(req.params.id);
-    if (!Number.isInteger(id)) {
-      return res.status(400).json({ message: 'Invalid patient id' });
-    }
+  router.put(
+    '/:id',
+    asyncHandler(async (req, res) => {
+      const id = Number(req.params.id);
+      if (!Number.isInteger(id)) {
+        return res.status(400).json({ message: 'Invalid patient id' });
+      }
 
-    const errors = validatePatient(req.body);
-    if (Object.keys(errors).length > 0) {
-      return res.status(400).json({ message: 'Validation failed', errors });
-    }
+      const errors = validatePatient(req.body);
+      if (Object.keys(errors).length > 0) {
+        return res.status(400).json({ message: 'Validation failed', errors });
+      }
 
-    const duplicates = findDuplicates(db, req.body, { excludeId: id });
-    const patient = updatePatientRecord(db, id, req.body);
-    if (!patient) {
-      return res.status(404).json({ message: 'Patient not found' });
-    }
+      const duplicates = await findDuplicates(pool, req.body, { excludeId: id });
+      const patient = await updatePatientRecord(pool, id, req.body);
+      if (!patient) {
+        return res.status(404).json({ message: 'Patient not found' });
+      }
 
-    return res.status(200).json({
-      ...patient,
-      duplicateWarning: duplicates.length > 0,
-    });
-  });
+      return res.status(200).json({
+        ...patient,
+        duplicateWarning: duplicates.length > 0,
+      });
+    }),
+  );
 
   return router;
 }

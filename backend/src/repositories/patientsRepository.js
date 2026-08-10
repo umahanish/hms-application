@@ -42,58 +42,96 @@ function toPatient(row) {
   };
 }
 
-export function createPatient(db, patient) {
+export async function createPatient(pool, patient) {
   const row = toRow(patient);
-  const result = db
-    .prepare(
-      `INSERT INTO patients (first_name, last_name, dob, gender, phone, email, address_line1, address_line2,
-        city, state, zip, emergency_contact_name, emergency_contact_phone, insurance_provider, insurance_policy_number)
-       VALUES (@first_name, @last_name, @dob, @gender, @phone, @email, @address_line1, @address_line2,
-        @city, @state, @zip, @emergency_contact_name, @emergency_contact_phone, @insurance_provider, @insurance_policy_number)`,
-    )
-    .run(row);
+  const now = new Date().toISOString();
 
-  return findPatientById(db, result.lastInsertRowid);
+  const [result] = await pool.execute(
+    `INSERT INTO patients (first_name, last_name, dob, gender, phone, email, address_line1, address_line2,
+      city, state, zip, emergency_contact_name, emergency_contact_phone, insurance_provider, insurance_policy_number,
+      created_at, updated_at)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+    [
+      row.first_name,
+      row.last_name,
+      row.dob,
+      row.gender,
+      row.phone,
+      row.email,
+      row.address_line1,
+      row.address_line2,
+      row.city,
+      row.state,
+      row.zip,
+      row.emergency_contact_name,
+      row.emergency_contact_phone,
+      row.insurance_provider,
+      row.insurance_policy_number,
+      now,
+      now,
+    ],
+  );
+
+  return findPatientById(pool, result.insertId);
 }
 
-export function updatePatient(db, id, patient) {
-  const existing = findPatientById(db, id);
+export async function updatePatient(pool, id, patient) {
+  const existing = await findPatientById(pool, id);
   if (!existing) return null;
 
   const row = toRow(patient);
-  db.prepare(
+  const now = new Date().toISOString();
+
+  await pool.execute(
     `UPDATE patients SET
-      first_name = @first_name, last_name = @last_name, dob = @dob, gender = @gender,
-      phone = @phone, email = @email, address_line1 = @address_line1, address_line2 = @address_line2,
-      city = @city, state = @state, zip = @zip, emergency_contact_name = @emergency_contact_name,
-      emergency_contact_phone = @emergency_contact_phone, insurance_provider = @insurance_provider,
-      insurance_policy_number = @insurance_policy_number,
-      updated_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now')
-     WHERE id = @id`,
-  ).run({ ...row, id });
+      first_name = ?, last_name = ?, dob = ?, gender = ?,
+      phone = ?, email = ?, address_line1 = ?, address_line2 = ?,
+      city = ?, state = ?, zip = ?, emergency_contact_name = ?,
+      emergency_contact_phone = ?, insurance_provider = ?,
+      insurance_policy_number = ?, updated_at = ?
+     WHERE id = ?`,
+    [
+      row.first_name,
+      row.last_name,
+      row.dob,
+      row.gender,
+      row.phone,
+      row.email,
+      row.address_line1,
+      row.address_line2,
+      row.city,
+      row.state,
+      row.zip,
+      row.emergency_contact_name,
+      row.emergency_contact_phone,
+      row.insurance_provider,
+      row.insurance_policy_number,
+      now,
+      id,
+    ],
+  );
 
-  return findPatientById(db, id);
+  return findPatientById(pool, id);
 }
 
-export function findPatientById(db, id) {
-  const row = db.prepare('SELECT * FROM patients WHERE id = ?').get(id);
-  return toPatient(row);
+export async function findPatientById(pool, id) {
+  const [rows] = await pool.execute('SELECT * FROM patients WHERE id = ?', [id]);
+  return toPatient(rows[0]);
 }
 
-export function searchPatients(db, term) {
+export async function searchPatients(pool, term) {
   const like = `%${term.toLowerCase()}%`;
-  const rows = db
-    .prepare(
-      `SELECT * FROM patients
-       WHERE lower(first_name) LIKE @like
-          OR lower(last_name) LIKE @like
-          OR lower(first_name || ' ' || last_name) LIKE @like
-          OR phone LIKE @like
-          OR dob LIKE @like
-          OR CAST(id AS TEXT) = @term
-       ORDER BY last_name, first_name`,
-    )
-    .all({ like, term });
+  const [rows] = await pool.execute(
+    `SELECT * FROM patients
+     WHERE LOWER(first_name) LIKE ?
+        OR LOWER(last_name) LIKE ?
+        OR LOWER(CONCAT(first_name, ' ', last_name)) LIKE ?
+        OR phone LIKE ?
+        OR dob LIKE ?
+        OR CAST(id AS CHAR) = ?
+     ORDER BY last_name, first_name`,
+    [like, like, like, like, like, term],
+  );
 
   return rows.map(toPatient);
 }

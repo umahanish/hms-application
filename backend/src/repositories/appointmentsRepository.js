@@ -19,96 +19,134 @@ function toAppointment(row) {
   };
 }
 
-function findRow(db, id) {
-  return db.prepare('SELECT * FROM appointments WHERE id = ?').get(id);
+async function findRow(pool, id) {
+  const [rows] = await pool.execute('SELECT * FROM appointments WHERE id = ?', [id]);
+  return rows[0];
 }
 
-export function findAppointmentById(db, id) {
-  return toAppointment(findRow(db, id));
+export async function findAppointmentById(pool, id) {
+  return toAppointment(await findRow(pool, id));
 }
 
 /**
- * Checks for a scheduling conflict and inserts the appointment inside a single
- * synchronous transaction. better-sqlite3 executes transactions synchronously, so
- * no other request can interleave between the check and the insert, which is what
- * makes this safe against double-booking races within the same process.
+ * Takes a row lock on (doctor_id, date) so concurrent booking/reschedule attempts
+ * for the same doctor's day serialize instead of racing between the conflict check
+ * and the insert/update below.
  */
-export function createAppointment(db, { patientId, doctorId, date, startTime, endTime, reason }) {
-  return db.transaction(() => {
-    if (hasConflict(db, doctorId, date, startTime, endTime)) {
+async function lockDoctorDay(connection, doctorId, date) {
+  await connection.execute(
+    'INSERT INTO doctor_day_locks (doctor_id, appointment_date) VALUES (?, ?) ON DUPLICATE KEY UPDATE doctor_id = doctor_id',
+    [doctorId, date],
+  );
+  await connection.execute(
+    'SELECT * FROM doctor_day_locks WHERE doctor_id = ? AND appointment_date = ? FOR UPDATE',
+    [doctorId, date],
+  );
+}
+
+/** Checks for a scheduling conflict and inserts the appointment inside a single, doctor/day-locked transaction. */
+export async function createAppointment(pool, { patientId, doctorId, date, startTime, endTime, reason }) {
+  const connection = await pool.getConnection();
+  try {
+    await connection.beginTransaction();
+    await lockDoctorDay(connection, doctorId, date);
+
+    if (await hasConflict(connection, doctorId, date, startTime, endTime)) {
       throw new SlotConflictError('The selected slot is no longer available');
     }
 
-    const result = db
-      .prepare(
-        `INSERT INTO appointments (patient_id, doctor_id, appointment_date, start_time, end_time, reason)
-         VALUES (?, ?, ?, ?, ?, ?)`,
-      )
-      .run(patientId, doctorId, date, startTime, endTime, reason ?? null);
+    const now = new Date().toISOString();
+    const [result] = await connection.execute(
+      `INSERT INTO appointments (patient_id, doctor_id, appointment_date, start_time, end_time, status, reason, created_at, updated_at)
+       VALUES (?, ?, ?, ?, ?, 'booked', ?, ?, ?)`,
+      [patientId, doctorId, date, startTime, endTime, reason ?? null, now, now],
+    );
 
-    return findAppointmentById(db, result.lastInsertRowid);
-  })();
+    await connection.commit();
+    return await findAppointmentById(pool, result.insertId);
+  } catch (error) {
+    await connection.rollback();
+    throw error;
+  } finally {
+    connection.release();
+  }
 }
 
 /** Reschedules an existing, non-cancelled appointment to a new date/time, atomically re-checking for conflicts. */
-export function rescheduleAppointment(db, id, { date, startTime, endTime, reason }) {
-  return db.transaction(() => {
-    const existing = findRow(db, id);
-    if (!existing) return null;
+export async function rescheduleAppointment(pool, id, { date, startTime, endTime, reason }) {
+  const connection = await pool.getConnection();
+  try {
+    await connection.beginTransaction();
+
+    const [existingRows] = await connection.execute('SELECT * FROM appointments WHERE id = ? FOR UPDATE', [id]);
+    const existing = existingRows[0];
+    if (!existing) {
+      await connection.commit();
+      return null;
+    }
     if (existing.status === 'cancelled') {
       throw new CancelledAppointmentError('Cannot reschedule a cancelled appointment');
     }
 
-    if (hasConflict(db, existing.doctor_id, date, startTime, endTime, { excludeAppointmentId: id })) {
+    await lockDoctorDay(connection, existing.doctor_id, date);
+
+    if (await hasConflict(connection, existing.doctor_id, date, startTime, endTime, { excludeAppointmentId: id })) {
       throw new SlotConflictError('The selected slot is no longer available');
     }
 
-    db.prepare(
-      `UPDATE appointments SET appointment_date = ?, start_time = ?, end_time = ?, reason = ?,
-        updated_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now')
+    const now = new Date().toISOString();
+    await connection.execute(
+      `UPDATE appointments SET appointment_date = ?, start_time = ?, end_time = ?, reason = ?, updated_at = ?
        WHERE id = ?`,
-    ).run(date, startTime, endTime, reason ?? existing.reason, id);
+      [date, startTime, endTime, reason ?? existing.reason, now, id],
+    );
 
-    return findAppointmentById(db, id);
-  })();
+    await connection.commit();
+    return await findAppointmentById(pool, id);
+  } catch (error) {
+    await connection.rollback();
+    throw error;
+  } finally {
+    connection.release();
+  }
 }
 
-export function cancelAppointment(db, id) {
-  const existing = findRow(db, id);
+export async function cancelAppointment(pool, id) {
+  const existing = await findRow(pool, id);
   if (!existing) return null;
 
-  db.prepare(
-    `UPDATE appointments SET status = 'cancelled', updated_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now') WHERE id = ?`,
-  ).run(id);
+  const now = new Date().toISOString();
+  await pool.execute(`UPDATE appointments SET status = 'cancelled', updated_at = ? WHERE id = ?`, [now, id]);
 
-  return findAppointmentById(db, id);
+  return findAppointmentById(pool, id);
 }
 
-export function findAppointments(db, { patientId, doctorId, dateFrom, dateTo } = {}) {
+export async function findAppointments(pool, { patientId, doctorId, dateFrom, dateTo } = {}) {
   const clauses = [];
-  const params = {};
+  const params = [];
 
   if (patientId != null) {
-    clauses.push('patient_id = @patientId');
-    params.patientId = patientId;
+    clauses.push('patient_id = ?');
+    params.push(patientId);
   }
   if (doctorId != null) {
-    clauses.push('doctor_id = @doctorId');
-    params.doctorId = doctorId;
+    clauses.push('doctor_id = ?');
+    params.push(doctorId);
   }
   if (dateFrom) {
-    clauses.push('appointment_date >= @dateFrom');
-    params.dateFrom = dateFrom;
+    clauses.push('appointment_date >= ?');
+    params.push(dateFrom);
   }
   if (dateTo) {
-    clauses.push('appointment_date <= @dateTo');
-    params.dateTo = dateTo;
+    clauses.push('appointment_date <= ?');
+    params.push(dateTo);
   }
 
   const where = clauses.length > 0 ? `WHERE ${clauses.join(' AND ')}` : '';
-  const rows = db
-    .prepare(`SELECT * FROM appointments ${where} ORDER BY appointment_date, start_time`)
-    .all(params);
+  const [rows] = await pool.execute(
+    `SELECT * FROM appointments ${where} ORDER BY appointment_date, start_time`,
+    params,
+  );
 
   return rows.map(toAppointment);
 }

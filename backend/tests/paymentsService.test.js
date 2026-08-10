@@ -1,7 +1,7 @@
-import { describe, expect, it, beforeEach, afterEach, vi } from 'vitest';
-import { createConnection } from '../src/db/connection.js';
-import { migrateUp } from '../src/db/migrate.js';
-import { migrations } from '../src/migrations/index.js';
+import { describe, expect, it, beforeEach, vi } from 'vitest';
+import { createFakePool } from './helpers/fakePool.js';
+import { migrateUp } from '../src/db/migrateSingleStore.js';
+import { migrations } from '../src/migrations-singlestore/index.js';
 import { createPatient } from '../src/repositories/patientsRepository.js';
 import { createInvoice } from '../src/repositories/invoicesRepository.js';
 import { findPaymentsByInvoice } from '../src/repositories/paymentsRepository.js';
@@ -35,33 +35,29 @@ const VALID_PATIENT = {
 };
 
 describe('paymentsService', () => {
-  let db;
+  let pool;
   let invoiceId;
 
-  beforeEach(() => {
+  beforeEach(async () => {
     vi.clearAllMocks();
-    db = createConnection(':memory:');
-    migrateUp(db, migrations);
-    const patientId = createPatient(db, VALID_PATIENT).id;
-    const { invoice } = createInvoice(db, {
+    pool = createFakePool();
+    await migrateUp(pool, migrations);
+    const patientId = (await createPatient(pool, VALID_PATIENT)).id;
+    const { invoice } = await createInvoice(pool, {
       patientId,
       lineItems: [{ description: 'Consultation', quantity: 1, unitPrice: 100 }],
     });
     invoiceId = invoice.id;
   });
 
-  afterEach(() => {
-    db.close();
-  });
-
   it('throws InvoiceNotFoundError for an unknown invoice', async () => {
-    await expect(processPayment(db, { invoiceId: 9999, amount: 100, method: 'card' })).rejects.toBeInstanceOf(
+    await expect(processPayment(pool, { invoiceId: 9999, amount: 100, method: 'card' })).rejects.toBeInstanceOf(
       InvoiceNotFoundError,
     );
   });
 
   it('records a cash payment immediately without calling the gateway, and marks the invoice paid', async () => {
-    const result = await processPayment(db, { invoiceId, amount: 100, method: 'cash' });
+    const result = await processPayment(pool, { invoiceId, amount: 100, method: 'cash' });
 
     expect(chargeGateway).not.toHaveBeenCalled();
     expect(result.payment.status).toBe('succeeded');
@@ -70,7 +66,7 @@ describe('paymentsService', () => {
   });
 
   it('processes a successful card payment on the first attempt and updates the invoice', async () => {
-    const result = await processPayment(db, { invoiceId, amount: 60, method: 'card' });
+    const result = await processPayment(pool, { invoiceId, amount: 60, method: 'card' });
 
     expect(chargeGateway).toHaveBeenCalledTimes(1);
     expect(result.payment.status).toBe('succeeded');
@@ -83,7 +79,7 @@ describe('paymentsService', () => {
       .mockRejectedValueOnce(new GatewayError('Gateway request timed out', { retryable: true }))
       .mockResolvedValueOnce({ gatewayReference: 'gw_test_1', status: 'succeeded' });
 
-    const result = await processPayment(db, { invoiceId, amount: 100, method: 'card' });
+    const result = await processPayment(pool, { invoiceId, amount: 100, method: 'card' });
 
     expect(chargeGateway).toHaveBeenCalledTimes(2);
     expect(result.payment.status).toBe('succeeded');
@@ -93,13 +89,13 @@ describe('paymentsService', () => {
   it('exhausts retries on repeated timeouts, logs a failed payment, and leaves the invoice untouched', async () => {
     chargeGateway.mockRejectedValue(new GatewayError('Gateway request timed out', { retryable: true }));
 
-    await expect(processPayment(db, { invoiceId, amount: 100, method: 'card' })).rejects.toMatchObject({
+    await expect(processPayment(pool, { invoiceId, amount: 100, method: 'card' })).rejects.toMatchObject({
       retryable: true,
     });
 
     expect(chargeGateway).toHaveBeenCalledTimes(3); // MAX_ATTEMPTS
 
-    const payments = findPaymentsByInvoice(db, invoiceId);
+    const payments = await findPaymentsByInvoice(pool, invoiceId);
     expect(payments).toHaveLength(1);
     expect(payments[0].status).toBe('failed');
     expect(payments[0].failureReason).toBe('Gateway request timed out');
@@ -108,19 +104,19 @@ describe('paymentsService', () => {
   it('does not retry a non-retryable decline and reports it clearly', async () => {
     chargeGateway.mockRejectedValueOnce(new GatewayError('Payment was declined', { retryable: false }));
 
-    await expect(processPayment(db, { invoiceId, amount: 100, method: 'card' })).rejects.toBeInstanceOf(
+    await expect(processPayment(pool, { invoiceId, amount: 100, method: 'card' })).rejects.toBeInstanceOf(
       PaymentDeclinedError,
     );
 
     expect(chargeGateway).toHaveBeenCalledTimes(1);
-    const payments = findPaymentsByInvoice(db, invoiceId);
+    const payments = await findPaymentsByInvoice(pool, invoiceId);
     expect(payments[0]).toMatchObject({ status: 'failed', failureReason: 'Payment was declined' });
   });
 
   it('records a pending payment for an async gateway and leaves the invoice untouched until reconciled', async () => {
     chargeGateway.mockResolvedValueOnce({ gatewayReference: 'gw_pending_1', status: 'pending' });
 
-    const result = await processPayment(db, { invoiceId, amount: 100, method: 'upi' });
+    const result = await processPayment(pool, { invoiceId, amount: 100, method: 'upi' });
 
     expect(result.payment.status).toBe('pending');
     expect(result.invoice.status).toBe('unpaid');
@@ -130,9 +126,9 @@ describe('paymentsService', () => {
   describe('reconcileWebhookPayment', () => {
     it('applies a succeeded webhook to the invoice', async () => {
       chargeGateway.mockResolvedValueOnce({ gatewayReference: 'gw_pending_2', status: 'pending' });
-      await processPayment(db, { invoiceId, amount: 100, method: 'upi' });
+      await processPayment(pool, { invoiceId, amount: 100, method: 'upi' });
 
-      const result = reconcileWebhookPayment(db, { gatewayReference: 'gw_pending_2', status: 'succeeded' });
+      const result = await reconcileWebhookPayment(pool, { gatewayReference: 'gw_pending_2', status: 'succeeded' });
 
       expect(result.payment.status).toBe('succeeded');
       expect(result.invoice.status).toBe('paid');
@@ -141,9 +137,9 @@ describe('paymentsService', () => {
 
     it('marks a failed webhook without touching the invoice', async () => {
       chargeGateway.mockResolvedValueOnce({ gatewayReference: 'gw_pending_3', status: 'pending' });
-      await processPayment(db, { invoiceId, amount: 100, method: 'upi' });
+      await processPayment(pool, { invoiceId, amount: 100, method: 'upi' });
 
-      const result = reconcileWebhookPayment(db, {
+      const result = await reconcileWebhookPayment(pool, {
         gatewayReference: 'gw_pending_3',
         status: 'failed',
         failureReason: 'Card declined post-authorization',
@@ -153,10 +149,10 @@ describe('paymentsService', () => {
       expect(result.invoice.status).toBe('unpaid');
     });
 
-    it('throws PaymentNotFoundError for an unknown gateway reference', () => {
-      expect(() => reconcileWebhookPayment(db, { gatewayReference: 'gw_unknown', status: 'succeeded' })).toThrow(
-        PaymentNotFoundError,
-      );
+    it('throws PaymentNotFoundError for an unknown gateway reference', async () => {
+      await expect(
+        reconcileWebhookPayment(pool, { gatewayReference: 'gw_unknown', status: 'succeeded' }),
+      ).rejects.toBeInstanceOf(PaymentNotFoundError);
     });
   });
 });

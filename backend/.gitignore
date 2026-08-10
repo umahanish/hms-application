@@ -5,3 +5,4 @@ node_modules
 *.sqlite-shm
 .env
 coverage
+db/setup/create_app_user.sql
