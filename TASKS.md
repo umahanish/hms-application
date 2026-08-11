@@ -144,3 +144,18 @@ constraints. Fixed all of them:
       briefly using the shared starter workspace instead of the dedicated
       one. Confirmed the dedicated `hms-workspace-group` workspace (no such
       cap) is the correct one for this app; not a code issue
+
+## HMS-17: Host backend so the live GitHub Pages site can actually write data (deferred)
+- [ ] Deploy backend to a publicly reachable host (Render/Railway/Fly.io)
+- [ ] Configure SingleStore + PAYMENT_WEBHOOK_SECRET as host-managed
+      secrets (not committed)
+- [ ] CORS: allow the GitHub Pages origin on the hosted backend
+- [ ] Point frontend's VITE_API_BASE_URL at the hosted backend for
+      production builds (local dev keeps defaulting to localhost)
+- [ ] Verify end-to-end on the live site; update HMS-Project-Instructions.md
+
+Context: the live GitHub Pages site currently has no backend to call —
+any write action (e.g. registering a patient) fails with 405 Method Not
+Allowed, since GitHub Pages only serves static files. This is expected
+given the current setup, not a bug. User explicitly deferred this work
+(2026-08-11) rather than build it now; left as a tracked gap.

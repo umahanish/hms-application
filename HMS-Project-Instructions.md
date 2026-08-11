@@ -573,3 +573,9 @@ This section is appended to (never rewritten) whenever a new piece of work lands
 - SingleStore's shared/starter-tier workspaces cap total table count — briefly hit that limit before confirming the dedicated workspace (no such cap) is the correct target.
 
 **Verification:** confirmed via `curl` (POST then GET) and then a full headless-browser pass (Playwright) against the live app and the real database — clicked "Add New Patient," filled the form, submitted, confirmed the new patient's profile rendered correctly with no console errors. 139 backend + 69 frontend tests passing, CI green, HMS-16 transitioned to Resolved.
+
+### 2026-08-11 — Known gap: live GitHub Pages site can't write data (HMS-17, deferred)
+
+Testing the "Add New Patient" feature on the deployed GitHub Pages URL (as opposed to local dev servers) surfaces `405 Method Not Allowed`. This is expected, not a regression: GitHub Pages only serves static files, and the live site currently has no backend to call. Every write action (patient registration, appointment booking, billing, payments) is affected, not just this feature.
+
+Fixing this for real means deploying the backend somewhere publicly reachable (Render/Railway/Fly.io), managing SingleStore + webhook secrets as host-managed config rather than committed values, configuring CORS for the GitHub Pages origin, and pointing the frontend's production build at the hosted backend URL. Offered to do this now; user chose to defer and just track it — filed as Jira HMS-17 (status: To Do, correctly not marked Resolved since it isn't done) and TASKS.md. Revisit when live write-capability is actually wanted.
