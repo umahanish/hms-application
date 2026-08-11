@@ -1,6 +1,10 @@
 export const id = '004_create_billing';
 
 export async function up(pool) {
+  // idempotency_key is stored here for display/audit but NOT constrained unique on this
+  // table: SingleStore requires a UNIQUE KEY to be a superset of the shard key (id here),
+  // and idempotency_key is nullable so it can't just be folded into the primary key either.
+  // Uniqueness is instead enforced via the invoice_idempotency_keys guard table (migration 008).
   await pool.query(`
     CREATE TABLE IF NOT EXISTS invoices (
       id BIGINT AUTO_INCREMENT PRIMARY KEY,
@@ -14,7 +18,6 @@ export async function up(pool) {
       amount_paid DECIMAL(12,2) NOT NULL DEFAULT 0,
       created_at VARCHAR(30) NOT NULL,
       updated_at VARCHAR(30) NOT NULL,
-      UNIQUE KEY uq_invoices_idempotency_key (idempotency_key),
       KEY idx_invoices_patient (patient_id)
     );
   `);

@@ -10,32 +10,19 @@ describe('startServer', () => {
     }
   });
 
-  it('pings the database and applies migrations before listening', async () => {
+  it('pings the database before listening', async () => {
     const ping = vi.fn().mockResolvedValue();
-    const applyMigrations = vi.fn().mockResolvedValue();
     const dbPool = {};
-    const callOrder = [];
-    ping.mockImplementation(async () => {
-      callOrder.push('ping');
-    });
-    applyMigrations.mockImplementation(async () => {
-      callOrder.push('migrate');
-    });
 
-    server = await startServer({ port: 0, dbPool, ping, applyMigrations });
+    server = await startServer({ port: 0, dbPool, ping });
 
-    expect(callOrder).toEqual(['ping', 'migrate']);
-    expect(applyMigrations).toHaveBeenCalledWith(dbPool, expect.any(Array));
+    expect(ping).toHaveBeenCalledTimes(1);
     expect(server.listening).toBe(true);
   });
 
   it('propagates a failed database ping without starting the server', async () => {
     const ping = vi.fn().mockRejectedValue(new Error('connection refused'));
-    const applyMigrations = vi.fn();
 
-    await expect(startServer({ port: 0, dbPool: {}, ping, applyMigrations })).rejects.toThrow(
-      'connection refused',
-    );
-    expect(applyMigrations).not.toHaveBeenCalled();
+    await expect(startServer({ port: 0, dbPool: {}, ping })).rejects.toThrow('connection refused');
   });
 });

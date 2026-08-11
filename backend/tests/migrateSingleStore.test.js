@@ -11,6 +11,7 @@ const MIGRATION_IDS = [
   '005_create_payments',
   '006_add_invoice_department',
   '007_create_doctor_day_locks',
+  '008_create_invoice_idempotency_keys',
 ];
 
 describe('SingleStore migration registry', () => {
@@ -39,6 +40,7 @@ describe('SingleStore migration registry', () => {
       'invoice_line_items',
       'payments',
       'doctor_day_locks',
+      'invoice_idempotency_keys',
     ]) {
       expect(pool.store.tables[table]).toBeDefined();
     }
@@ -54,12 +56,12 @@ describe('SingleStore migration registry', () => {
   it('rolls migrations back newest-first, in reverse order', async () => {
     await migrateUp(pool, migrations);
 
+    expect(await migrateDown(pool, migrations)).toBe('008_create_invoice_idempotency_keys');
     expect(await migrateDown(pool, migrations)).toBe('007_create_doctor_day_locks');
-    expect(await migrateDown(pool, migrations)).toBe('006_add_invoice_department');
 
     const remaining = await appliedMigrations(pool);
+    expect(remaining).not.toContain('008_create_invoice_idempotency_keys');
     expect(remaining).not.toContain('007_create_doctor_day_locks');
-    expect(remaining).not.toContain('006_add_invoice_department');
     expect(remaining).toContain('001_create_patients');
   });
 

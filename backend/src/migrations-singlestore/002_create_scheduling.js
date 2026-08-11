@@ -32,12 +32,14 @@ export async function up(pool) {
     );
   `);
 
+  // holiday_date is the natural primary key (no separate id/AUTO_INCREMENT): SingleStore
+  // requires a UNIQUE KEY to be a superset of the table's shard key, which defaults to
+  // the primary key, so a surrogate id + a separate UNIQUE KEY on holiday_date can't
+  // coexist. Nothing in the app references holidays.id.
   await pool.query(`
     CREATE TABLE IF NOT EXISTS holidays (
-      id BIGINT AUTO_INCREMENT PRIMARY KEY,
-      holiday_date VARCHAR(10) NOT NULL,
-      name VARCHAR(150),
-      UNIQUE KEY uq_holidays_date (holiday_date)
+      holiday_date VARCHAR(10) PRIMARY KEY,
+      name VARCHAR(150)
     );
   `);
 

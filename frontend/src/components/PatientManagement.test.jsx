@@ -2,7 +2,7 @@ import { render, screen, waitFor } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { describe, expect, it, vi, beforeEach } from 'vitest';
 import PatientManagement from './PatientManagement.jsx';
-import { searchPatients, getPatient, updatePatient } from '../api/patients.js';
+import { searchPatients, getPatient, registerPatient, updatePatient } from '../api/patients.js';
 
 vi.mock('../api/patients.js', () => ({
   searchPatients: vi.fn(),
@@ -58,6 +58,38 @@ describe('PatientManagement (search -> profile -> edit flow)', () => {
 
     await waitFor(() => expect(updatePatient).toHaveBeenCalledWith('P-1', expect.objectContaining({ firstName: 'Janet' })));
     expect(await screen.findByRole('heading', { name: 'Janet Doe' })).toBeInTheDocument();
+  });
+
+  it('lets a user add a brand-new patient via the "Add New Patient" action', async () => {
+    const newPatient = { id: 'P-2', firstName: 'Alex', lastName: 'Kim' };
+    registerPatient.mockResolvedValueOnce(newPatient);
+
+    const user = userEvent.setup();
+    render(<PatientManagement />);
+
+    await user.click(screen.getByRole('button', { name: 'Add New Patient' }));
+
+    const form = await screen.findByRole('heading', { name: 'Patient Registration' });
+    expect(form).toBeInTheDocument();
+    expect(screen.getByLabelText('First Name')).toHaveValue('');
+
+    await user.type(screen.getByLabelText('First Name'), 'Alex');
+    await user.type(screen.getByLabelText('Last Name'), 'Kim');
+    await user.type(screen.getByLabelText('Date of Birth'), '1995-05-05');
+    await user.selectOptions(screen.getByLabelText('Gender'), 'male');
+    await user.type(screen.getByLabelText('Phone'), '555-000-1111');
+    await user.type(screen.getByLabelText('Email'), 'alex.kim@example.com');
+    await user.type(screen.getByLabelText('Address Line 1'), '1 Test Ave');
+    await user.type(screen.getByLabelText('City'), 'Springfield');
+    await user.type(screen.getByLabelText('Emergency Contact Name'), 'Sam Kim');
+    await user.type(screen.getByLabelText('Emergency Contact Phone'), '555-222-3333');
+    await user.type(screen.getByLabelText('Insurance Provider'), 'Acme Health');
+    await user.type(screen.getByLabelText('Policy Number'), 'POL-9');
+
+    await user.click(screen.getByRole('button', { name: 'Register Patient' }));
+
+    await waitFor(() => expect(registerPatient).toHaveBeenCalledWith(expect.objectContaining({ firstName: 'Alex' })));
+    expect(await screen.findByRole('heading', { name: 'Alex Kim' })).toBeInTheDocument();
   });
 
   it('shows a graceful error state when loading a profile fails', async () => {

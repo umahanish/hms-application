@@ -39,8 +39,10 @@ export async function findInvoiceById(pool, id) {
 }
 
 async function findInvoiceByIdempotencyKey(pool, idempotencyKey) {
-  const [rows] = await pool.execute('SELECT id FROM invoices WHERE idempotency_key = ?', [idempotencyKey]);
-  return rows[0] ? findInvoiceById(pool, rows[0].id) : null;
+  const [rows] = await pool.execute('SELECT invoice_id FROM invoice_idempotency_keys WHERE idempotency_key = ?', [
+    idempotencyKey,
+  ]);
+  return rows[0] ? findInvoiceById(pool, rows[0].invoice_id) : null;
 }
 
 export async function findInvoicesByPatient(pool, patientId) {
@@ -81,9 +83,10 @@ export async function findInvoices(pool, { patientId, status, dateFrom, dateTo, 
 
 /**
  * Creates an invoice from line items, computing subtotal/discount/tax/total, inside
- * a transaction so the invoice row and its line items are written atomically. When
- * an idempotencyKey collides with an existing invoice (UNIQUE constraint), the
- * transaction rolls back and the existing invoice is returned instead of a duplicate.
+ * a transaction so the invoice row, its line items, and its idempotency-key guard row
+ * are written atomically. When an idempotencyKey collides with an existing invoice
+ * (UNIQUE constraint on invoice_idempotency_keys), the transaction rolls back and the
+ * existing invoice is returned instead of a duplicate.
  */
 export async function createInvoice(
   pool,
@@ -112,6 +115,13 @@ export async function createInvoice(
       ],
     );
     const invoiceId = result.insertId;
+
+    if (idempotencyKey) {
+      await connection.execute(
+        'INSERT INTO invoice_idempotency_keys (idempotency_key, invoice_id) VALUES (?, ?)',
+        [idempotencyKey, invoiceId],
+      );
+    }
 
     const insertLineItemSql =
       'INSERT INTO invoice_line_items (invoice_id, description, quantity, unit_price, amount) VALUES (?, ?, ?, ?, ?)';

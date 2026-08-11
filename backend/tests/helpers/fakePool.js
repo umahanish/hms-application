@@ -139,10 +139,18 @@ function runInsert(store, sql, params) {
     row.id = store.autoIncrement[table];
   }
 
-  if (table === 'invoices' && row.idempotency_key != null) {
+  if (table === 'invoice_idempotency_keys') {
     const dup = rows.find((r) => r.idempotency_key === row.idempotency_key);
     if (dup) {
       const error = new Error('Duplicate entry for key idempotency_key');
+      error.code = 'ER_DUP_ENTRY';
+      throw error;
+    }
+  }
+  if (table === 'holidays') {
+    const dup = rows.find((r) => r.holiday_date === row.holiday_date);
+    if (dup) {
+      const error = new Error('Duplicate entry for key holiday_date');
       error.code = 'ER_DUP_ENTRY';
       throw error;
     }

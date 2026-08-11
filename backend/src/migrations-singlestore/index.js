@@ -5,6 +5,7 @@ import * as createBilling from './004_create_billing.js';
 import * as createPayments from './005_create_payments.js';
 import * as addInvoiceDepartment from './006_add_invoice_department.js';
 import * as createDoctorDayLocks from './007_create_doctor_day_locks.js';
+import * as createInvoiceIdempotencyKeys from './008_create_invoice_idempotency_keys.js';
 
 export const migrations = [
   createPatients,
@@ -14,4 +15,5 @@ export const migrations = [
   createPayments,
   addInvoiceDepartment,
   createDoctorDayLocks,
+  createInvoiceIdempotencyKeys,
 ];

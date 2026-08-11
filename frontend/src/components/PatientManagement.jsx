@@ -7,7 +7,7 @@ import PatientRegistrationForm from './PatientRegistrationForm.jsx';
 export default function PatientManagement() {
   const [selectedPatient, setSelectedPatient] = useState(null);
   const [profileError, setProfileError] = useState('');
-  const [mode, setMode] = useState('search'); // search | profile | edit
+  const [mode, setMode] = useState('search'); // search | profile | edit | create
 
   async function handleSelectPatient(patient) {
     setProfileError('');
@@ -19,6 +19,12 @@ export default function PatientManagement() {
       setProfileError(error.message || 'Unable to load patient profile.');
       setMode('profile');
     }
+  }
+
+  function handleAddNew() {
+    setProfileError('');
+    setSelectedPatient(null);
+    setMode('create');
   }
 
   function handleEdit(patient) {
@@ -33,7 +39,12 @@ export default function PatientManagement() {
 
   return (
     <div className="patient-management">
-      <PatientSearch onSelectPatient={handleSelectPatient} />
+      <div className="patient-management-toolbar">
+        <PatientSearch onSelectPatient={handleSelectPatient} />
+        <button type="button" onClick={handleAddNew}>
+          Add New Patient
+        </button>
+      </div>
 
       {mode === 'profile' && (
         <PatientProfile patient={selectedPatient} error={profileError} onEdit={handleEdit} />
@@ -46,6 +57,8 @@ export default function PatientManagement() {
           onSuccess={handleUpdateSuccess}
         />
       )}
+
+      {mode === 'create' && <PatientRegistrationForm onSuccess={handleUpdateSuccess} />}
     </div>
   );
 }
