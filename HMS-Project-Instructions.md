@@ -558,3 +558,18 @@ This section is appended to (never rewritten) whenever a new piece of work lands
 **Known follow-ups (tracked in TASKS.md):** no real authentication system behind the RBAC headers; no automated test coverage against a live SingleStore instance in CI.
 
 **Verification:** 139 backend tests + 68 frontend tests passing, SonarCloud quality gate `OK`, CI green end-to-end including the Pages deploy. All 15 Jira issues (HMS-1 through HMS-15) transitioned from To Do to Resolved to reflect that the whole story set — including this migration — is actually done.
+
+### 2026-08-11 — HMS-16: "Add New Patient" entry point, and the first real SingleStore connection
+
+**What:** The Patients screen had a fully-built registration form (HMS-4) with no way to reach it except editing an existing patient — no "create new patient" path existed in the live UI. Added an "Add New Patient" action to `PatientManagement.jsx` that renders the form in create mode. Created and closed Jira story HMS-16 for this.
+
+**Why it mattered more than it looked:** verifying this feature required actually running the app against a live SingleStore database for the first time all session — every prior check (automated tests, the pingDatabase() integration test) had been against the in-memory fake pool or simply skipped. That surfaced real issues the fake pool structurally can't catch:
+
+- `backend/.env` had stale placeholder values that never matched any real provisioned workspace.
+- The dedicated `hms-workspace-group` workspace's app user (`hms_app_user`) had never actually been created, and its intended password didn't meet the workspace's password policy (14+ chars, 1+ special character required).
+- An unquoted `#` in a `.env` value gets silently truncated by dotenv (it's read as a comment start) — passwords with special characters need quoting.
+- **Real schema bug:** SingleStore requires a `UNIQUE KEY` to be a superset of a table's shard key (default: the primary key). Two tables violated this (`holidays.holiday_date`, `invoices.idempotency_key`) — invisible to the fake pool, which doesn't model the constraint. Fixed by making `holiday_date` the natural primary key of `holidays`, and moving invoice-idempotency uniqueness to a dedicated `invoice_idempotency_keys` guard table (same pattern as `doctor_day_locks`).
+- **Real architecture bug:** the app tried to run migrations (`CREATE TABLE`) at every boot using its own least-privilege, DML-only DB connection, which structurally cannot run DDL. Split into a separate `npm run migrate` step meant to run with elevated credentials; normal app startup now only pings the DB.
+- SingleStore's shared/starter-tier workspaces cap total table count — briefly hit that limit before confirming the dedicated workspace (no such cap) is the correct target.
+
+**Verification:** confirmed via `curl` (POST then GET) and then a full headless-browser pass (Playwright) against the live app and the real database — clicked "Add New Patient," filled the form, submitted, confirmed the new patient's profile rendered correctly with no console errors. 139 backend + 69 frontend tests passing, CI green, HMS-16 transitioned to Resolved.
